@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Configure and preview one-way Azure DevOps FA work-item synchronization.">
+  <title>FA Sync Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#top" aria-label="FA Sync home">
+        <span class="brand-mark">FA</span>
+        <span><strong>Sync Console</strong><small>Azure DevOps</small></span>
+      </a>
+      <nav aria-label="Setup sections">
+        <button class="nav-item active" data-target="connection"><span>01</span>Connection</button>
+        <button class="nav-item" data-target="scope"><span>02</span>FA scope</button>
+        <button class="nav-item" data-target="mapping"><span>03</span>Mapping</button>
+        <button class="nav-item" data-target="schedule"><span>04</span>Schedule</button>
+        <button class="nav-item" data-target="run"><span>05</span>Run & review</button>
+      </nav>
+      <div class="sidebar-note">
+        <span class="status-dot"></span>
+        <div><strong>Demo mode</strong><small>Writes are disabled</small></div>
+      </div>
+    </aside>
+
+    <main id="top">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Unidirectional work-item synchronization</p>
+          <h1>FA Sync Console</h1>
+        </div>
+        <div class="top-actions">
+          <span class="mode-pill"><i></i> Safe dry run</span>
+          <button class="button ghost" id="helpButton">How it works</button>
+        </div>
+      </header>
+
+      <section class="metric-row" aria-label="Configuration summary">
+        <article><span>Source</span><strong id="sourceMetric">TestProject1_Base</strong></article>
+        <article><span>Destinations</span><strong id="destinationMetric">3</strong></article>
+        <article><span>FA items</span><strong id="itemMetric">6</strong></article>
+        <article><span>Direction</span><strong>One way</strong></article>
+      </section>
+
+      <section class="panel" id="connection">
+        <div class="section-heading">
+          <div><span class="step">01</span><h2>Connect your projects</h2></div>
+          <span class="section-status" id="connectionStatus">Not validated</span>
+        </div>
+        <div class="form-grid">
+          <label class="field full">
+            <span>Personal Access Token</span>
+            <span class="input-wrap"><input id="pat" type="password" autocomplete="new-password" placeholder="Paste PAT for this session"><button class="icon-button" id="togglePat" type="button" aria-label="Show PAT">Show</button></span>
+          </label>
+          <label class="field full">
+            <span>Source project</span>
+            <input id="source" type="url" value="https://dev.azure.com/PG-PSDC/TestProject1_Base">
+          </label>
+        </div>
+        <div class="destination-head"><h3>Destination projects</h3><button class="text-button" id="addDestination" type="button">＋ Add destination</button></div>
+        <div id="destinationList" class="destination-list"></div>
+        <div class="panel-actions">
+          <button class="button secondary" id="validateButton">Validate connections</button>
+          <button class="text-button danger" id="disconnectButton" type="button">Clear session PAT</button>
+        </div>
+      </section>
+
+      <section class="panel" id="scope">
+        <div class="section-heading">
+          <div><span class="step">02</span><h2>Select FA work items</h2></div>
+          <span class="section-status ready">Demo dataset</span>
+        </div>
+        <div class="toolbar">
+          <label class="search"><span>⌕</span><input id="searchItems" type="search" placeholder="Search by ID, type, or title"></label>
+          <label class="compact-field">FA marker<select id="faMarker"><option>Tag: FA</option><option>Area path</option><option>Custom field</option><option>Manual selection</option></select></label>
+          <button class="button ghost" id="selectAll">Select all</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th><span class="sr-only">Select</span></th><th>ID</th><th>Type</th><th>Title</th><th>Source state</th><th>Children</th></tr></thead>
+            <tbody id="itemRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="two-column">
+        <section class="panel" id="mapping">
+          <div class="section-heading"><div><span class="step">03</span><h2>Choose what moves</h2></div></div>
+          <div class="check-list" id="fieldList">
+            <label><input type="checkbox" value="Title" checked disabled><span><strong>Title</strong></span></label>
+            <label><input type="checkbox" value="Description" checked><span><strong>Description</strong></span></label>
+            <label><input type="checkbox" value="Impact assessment" checked><span><strong>Impact assessment</strong></span></label>
+            <label><input type="checkbox" value="Hyperlinks" checked><span><strong>Hyperlinks</strong></span></label>
+            <label><input type="checkbox" value="Tags" checked><span><strong>Tags</strong></span></label>
+            <label><input type="checkbox" value="Discussions"><span><strong>Discussions</strong></span></label>
+          </div>
+          <div class="locked-row"><span>State</span><strong>Never synchronized</strong></div>
+          <label class="switch-row"><span><strong>Preserve relationships</strong></span><input id="relations" type="checkbox" checked><i></i></label>
+        </section>
+
+        <section class="panel" id="schedule">
+          <div class="section-heading"><div><span class="step">04</span><h2>Set a cadence</h2></div></div>
+          <label class="switch-row"><span><strong>Scheduled synchronization</strong></span><input id="scheduleEnabled" type="checkbox" checked><i></i></label>
+          <div class="form-grid schedule-grid">
+            <label class="field"><span>Frequency</span><select id="frequency"><option>Daily</option><option>Every 6 hours</option><option>Weekly</option></select></label>
+            <label class="field"><span>Time</span><input id="syncTime" type="time" value="02:00"></label>
+            <label class="field full"><span>Timezone</span><select id="timezone"><option>Europe/Berlin</option><option>UTC</option><option>Asia/Kolkata</option></select></label>
+          </div>
+          <div class="next-run"><span>Next scheduled run</span><strong id="nextRun">Tomorrow at 02:00</strong></div>
+        </section>
+      </section>
+
+      <section class="panel run-panel" id="run">
+        <div class="run-copy">
+          <span class="step">05</span>
+          <div><h2>Ready for a safe preview</h2></div>
+        </div>
+        <div class="run-actions"><button class="button secondary" id="previewButton">Preview changes</button><button class="button primary" id="runButton">Run dry sync <span>→</span></button></div>
+      </section>
+
+      <section class="result-panel hidden" id="results" aria-live="polite">
+        <div class="result-head"><div><span class="success-mark">✓</span><div><h2 id="resultTitle">Preview complete</h2><p id="resultMessage"></p></div></div><button class="icon-button" id="closeResults" aria-label="Close results">Close</button></div>
+        <div class="result-grid" id="resultGrid"></div>
+      </section>
+
+      <footer><span>FA Sync Console · Python demo</span><span>PATs are session-only · Azure writes disabled</span></footer>
+    </main>
+  </div>
+  <div class="toast hidden" id="toast" role="status"></div>
+  <dialog id="helpDialog"><button class="dialog-close" aria-label="Close">×</button><p class="eyebrow">How it works</p><h2>One source. Many destinations.</h2><ol><li>Enter a PAT and validate project access.</li><li>Select the FA work items and fields to carry forward.</li><li>Preview creates, updates, and relationship links.</li><li>Run a safe dry sync and review each destination.</li></ol><p>Production writes remain intentionally disabled until conflict, deletion, identity, and custom-field rules are approved.</p></dialog>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
