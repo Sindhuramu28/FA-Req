@@ -90,11 +90,22 @@ def parse_project_url(raw_url: str) -> ProjectRef:
     return ProjectRef(organization, project, normalized)
 
 
-def azure_request(ref: ProjectRef, pat: str, path: str, *, method: str = "GET", payload: dict[str, Any] | None = None) -> Any:
+def azure_request(
+    ref: ProjectRef,
+    pat: str,
+    path: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    project_scoped: bool = True,
+) -> Any:
     token = base64.b64encode(f":{pat}".encode()).decode()
     data = json.dumps(payload).encode() if payload is not None else None
+    base_url = f"https://dev.azure.com/{urllib.parse.quote(ref.organization)}"
+    if project_scoped:
+        base_url += f"/{urllib.parse.quote(ref.project)}"
     req = urllib.request.Request(
-        f"https://dev.azure.com/{urllib.parse.quote(ref.organization)}/{urllib.parse.quote(ref.project)}/{path.lstrip('/')}",
+        f"{base_url}/{path.lstrip('/')}",
         data=data,
         method=method,
         headers={
@@ -115,7 +126,14 @@ def azure_request(ref: ProjectRef, pat: str, path: str, *, method: str = "GET", 
         except Exception:
             pass
         if exc.code in (401, 403):
-            raise PermissionError("The PAT is invalid or does not have access to this project.") from exc
+            raise PermissionError(
+                f"Authentication failed for {ref.project}. Check that the PAT is valid for "
+                f"the {ref.organization} organization and that your user can access this project."
+            ) from exc
+        if exc.code == 404:
+            raise ValueError(
+                f"Project '{ref.project}' was not found in organization '{ref.organization}'."
+            ) from exc
         raise RuntimeError(detail or f"Azure DevOps returned HTTP {exc.code}.") from exc
     except urllib.error.URLError as exc:
         raise ConnectionError("Azure DevOps could not be reached. Check the network and project URL.") from exc
@@ -163,7 +181,13 @@ def connect():
         projects.extend((f"Destination {i + 1}", parse_project_url(url)) for i, url in enumerate(destination_urls))
         results = []
         for label, ref in projects:
-            info = azure_request(ref, pat, "_apis/project?api-version=7.1")
+            project_name = urllib.parse.quote(ref.project, safe="")
+            info = azure_request(
+                ref,
+                pat,
+                f"_apis/projects/{project_name}?api-version=7.1",
+                project_scoped=False,
+            )
             results.append({
                 "label": label,
                 "name": info.get("name", ref.project),

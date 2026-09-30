@@ -13,6 +13,11 @@ class AppTests(unittest.TestCase):
         self.assertEqual(ref.organization, "PG-PSDC")
         self.assertEqual(ref.project, "TestProject1_Base")
 
+    def test_project_url_parser_decodes_names(self):
+        ref = parse_project_url("https://dev.azure.com/example/My%20Project")
+        self.assertEqual(ref.project, "My Project")
+        self.assertEqual(ref.url, "https://dev.azure.com/example/My%20Project")
+
     def test_health(self):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
