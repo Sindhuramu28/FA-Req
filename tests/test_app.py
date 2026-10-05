@@ -32,6 +32,14 @@ class AppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json["items"]), 6)
 
+    def test_live_items_require_validated_session(self):
+        response = self.client.post("/api/work-items", json={
+            "source": "https://dev.azure.com/example/source",
+            "marker": "tag",
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Validate", response.json["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

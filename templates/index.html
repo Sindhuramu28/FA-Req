@@ -75,11 +75,12 @@
       <section class="panel" id="scope">
         <div class="section-heading">
           <div><span class="step">02</span><h2>Select FA work items</h2></div>
-          <span class="section-status ready">Demo dataset</span>
+          <span class="section-status" id="scopeStatus">Not loaded</span>
         </div>
         <div class="toolbar">
           <label class="search"><span>⌕</span><input id="searchItems" type="search" placeholder="Search by ID, type, or title"></label>
-          <label class="compact-field">FA marker<select id="faMarker"><option>Tag: FA</option><option>Area path</option><option>Custom field</option><option>Manual selection</option></select></label>
+          <label class="compact-field">FA marker<select id="faMarker"><option value="tag">Tag: FA</option><option value="manual">Manual selection</option><option value="area">Area path (coming next)</option><option value="custom">Custom field (coming next)</option></select></label>
+          <button class="button secondary" id="loadItems">Load live items</button>
           <button class="button ghost" id="selectAll">Select all</button>
         </div>
         <div class="table-wrap">

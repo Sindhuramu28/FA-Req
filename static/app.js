@@ -79,8 +79,6 @@ function showPreview(data) {
 
 async function init() {
   renderDestinations();
-  const data = await fetch("/api/demo-items").then(response => response.json());
-  state.items = data.items;
   renderItems();
 }
 
@@ -121,6 +119,16 @@ $("#validateButton").addEventListener("click", async () => {
     $("#connectionStatus").classList.add("ready"); showToast(data.message);
   } catch (error) { showToast(error.message, true); }
   finally { button.disabled = false; button.textContent = "Validate connections"; }
+});
+$("#loadItems").addEventListener("click", async () => {
+  const button = $("#loadItems"); button.disabled = true; button.textContent = "Loading…";
+  try {
+    const data = await post("/api/work-items", {source: $("#source").value, marker: $("#faMarker").value});
+    state.items = data.items; renderItems();
+    $("#scopeStatus").textContent = `${data.items.length} live items`;
+    $("#scopeStatus").classList.add("ready"); showToast(data.message);
+  } catch (error) { showToast(error.message, true); }
+  finally { button.disabled = false; button.textContent = "Load live items"; }
 });
 $("#disconnectButton").addEventListener("click", async () => {
   const data = await post("/api/disconnect"); $("#pat").value = "";

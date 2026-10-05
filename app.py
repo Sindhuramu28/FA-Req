@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import sys
 import threading
 import time
@@ -79,6 +80,68 @@ MOCK_ITEMS = [
 URL_RE = re.compile(r"^https://dev\.azure\.com/(?P<org>[^/]+)/(?P<project>[^/?#]+)", re.I)
 
 
+def data_directory() -> str:
+    if sys.platform == "win32":
+        root = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
+    else:
+        root = os.path.join(os.path.expanduser("~"), ".local", "share")
+    path = os.path.join(root, "FA-Sync-Console")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+DATABASE_PATH = os.path.join(data_directory(), "fa-sync.db")
+
+
+def database() -> sqlite3.Connection:
+    connection = sqlite3.connect(DATABASE_PATH)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
+
+
+def initialize_database() -> None:
+    with database() as db:
+        db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS work_item_mappings (
+                source_organization TEXT NOT NULL,
+                source_project TEXT NOT NULL,
+                source_id INTEGER NOT NULL,
+                destination_organization TEXT NOT NULL,
+                destination_project TEXT NOT NULL,
+                destination_id INTEGER NOT NULL,
+                work_item_type TEXT NOT NULL,
+                last_source_revision INTEGER,
+                first_synced_at TEXT NOT NULL,
+                last_synced_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                last_error TEXT,
+                PRIMARY KEY (
+                    source_organization, source_project, source_id,
+                    destination_organization, destination_project
+                )
+            );
+            CREATE TABLE IF NOT EXISTS sync_runs (
+                run_id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                mode TEXT NOT NULL,
+                source_project TEXT NOT NULL,
+                destinations INTEGER NOT NULL DEFAULT 0,
+                created_count INTEGER NOT NULL DEFAULT 0,
+                updated_count INTEGER NOT NULL DEFAULT 0,
+                skipped_count INTEGER NOT NULL DEFAULT 0,
+                failed_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL
+            );
+            """
+        )
+
+
+initialize_database()
+
+
 def parse_project_url(raw_url: str) -> ProjectRef:
     url = raw_url.strip().rstrip("/")
     match = URL_RE.match(url)
@@ -145,6 +208,60 @@ def session_id() -> str:
     return session["vault_id"]
 
 
+def session_pat() -> str:
+    pat = PAT_VAULT.get(session_id())
+    if not pat:
+        raise PermissionError("Validate the project connections before loading live work items.")
+    return pat
+
+
+def wiql_escape(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def load_source_work_items(ref: ProjectRef, pat: str, marker: str) -> list[dict[str, Any]]:
+    supported_types = "'Epic','Feature','Requirement','Test Case'"
+    conditions = [f"[System.WorkItemType] IN ({supported_types})"]
+    if marker == "tag":
+        conditions.append("[System.Tags] CONTAINS 'FA'")
+    query = (
+        "SELECT [System.Id] FROM WorkItems WHERE "
+        + " AND ".join(conditions)
+        + " ORDER BY [System.Id]"
+    )
+    result = azure_request(
+        ref,
+        pat,
+        "_apis/wit/wiql?$top=1000&api-version=7.1",
+        method="POST",
+        payload={"query": query},
+    )
+    ids = [int(item["id"]) for item in result.get("workItems", [])]
+    records: list[dict[str, Any]] = []
+    for offset in range(0, len(ids), 200):
+        batch = ids[offset : offset + 200]
+        id_list = ",".join(str(item_id) for item_id in batch)
+        path = f"_apis/wit/workitems?ids={id_list}&$expand=Relations&errorPolicy=Omit&api-version=7.1"
+        response = azure_request(ref, pat, path)
+        for item in response.get("value", []):
+            fields = item.get("fields", {})
+            child_count = sum(
+                1 for relation in item.get("relations", [])
+                if relation.get("rel") == "System.LinkTypes.Hierarchy-Forward"
+            )
+            records.append({
+                "id": item["id"],
+                "rev": item.get("rev"),
+                "type": fields.get("System.WorkItemType", "Unknown"),
+                "title": fields.get("System.Title", "Untitled"),
+                "state": fields.get("System.State", ""),
+                "tags": fields.get("System.Tags", ""),
+                "children": child_count,
+                "selected": True,
+            })
+    return records
+
+
 @app.after_request
 def secure_headers(response):
     response.headers["Cache-Control"] = "no-store"
@@ -162,6 +279,28 @@ def index():
 @app.get("/api/demo-items")
 def demo_items():
     return jsonify({"items": MOCK_ITEMS, "mode": "demo"})
+
+
+@app.post("/api/work-items")
+def work_items():
+    body = request.get_json(silent=True) or {}
+    try:
+        ref = parse_project_url(str(body.get("source", "")))
+        marker = str(body.get("marker", "tag"))
+        if marker not in {"tag", "manual"}:
+            return jsonify({
+                "ok": False,
+                "message": "The first live version supports Tag: FA or Manual selection.",
+            }), 400
+        items = load_source_work_items(ref, session_pat(), marker)
+        return jsonify({
+            "ok": True,
+            "items": items,
+            "mode": "live",
+            "message": f"Loaded {len(items)} live work items from {ref.project}.",
+        })
+    except (ValueError, PermissionError, ConnectionError, RuntimeError) as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
 
 
 @app.post("/api/connect")
@@ -217,19 +356,38 @@ def preview():
     if not destinations:
         return jsonify({"ok": False, "message": "Add at least one destination project."}), 400
 
-    create_count = max(1, round(len(selected_ids) * 0.67))
-    update_count = len(selected_ids) - create_count
+    try:
+        source = parse_project_url(str(body.get("source", "")))
+        destination_refs = [parse_project_url(str(url)) for url in destinations]
+    except ValueError as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+    mapped_pairs = 0
+    with database() as db:
+        for destination in destination_refs:
+            placeholders = ",".join("?" for _ in selected_ids)
+            row = db.execute(
+                f"""SELECT COUNT(*) AS count FROM work_item_mappings
+                    WHERE source_organization=? AND source_project=?
+                    AND destination_organization=? AND destination_project=?
+                    AND source_id IN ({placeholders})""",
+                [source.organization, source.project, destination.organization,
+                 destination.project, *selected_ids],
+            ).fetchone()
+            mapped_pairs += int(row["count"])
+    total_pairs = len(selected_ids) * len(destination_refs)
+    create_count = total_pairs - mapped_pairs
+    update_count = mapped_pairs
     return jsonify({
         "ok": True,
         "summary": {
             "items": len(selected_ids),
             "destinations": len(destinations),
-            "creates": create_count * len(destinations),
-            "updates": update_count * len(destinations),
+            "creates": create_count,
+            "updates": update_count,
             "relationships": max(0, len(selected_ids) - 1) * len(destinations),
             "fields": len(fields),
         },
-        "message": "Dry-run preview completed. No Azure DevOps data was changed.",
+        "message": "Live mapping preview completed. No Azure DevOps data was changed.",
     })
 
 
