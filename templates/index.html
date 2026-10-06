@@ -9,8 +9,8 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body><main>
-  <header class="topbar"><div class="brand-block"><span class="brand-mark">AW</span><div><p class="eyebrow">Azure DevOps synchronization</p><h1>Azure WorkSync</h1></div></div><button class="button ghost" id="helpButton">How it works</button></header>
-  <section class="metric-row"><article><span>Source</span><strong id="sourceMetric">TestProject1_Base</strong></article><article><span>Destinations</span><strong id="destinationMetric">3</strong></article><article><span>Selected items</span><strong id="itemMetric">0</strong></article><article><span>Direction</span><strong>Source → destinations</strong></article></section>
+  <header class="topbar"><div class="brand-block"><span class="brand-mark">AW</span><div><p class="eyebrow">Azure DevOps synchronization</p><h1>Azure WorkSync</h1></div></div><div class="header-actions"><button class="button ghost" disabled>Instruction manual</button><a class="button ghost" href="https://dev.azure.com/PG-PSDC/Control%20and%20Protection%20System%20Base/_workitems/create/Issue?templateId=ef7abe6e-fcd8-42a5-9694-4abb6abe16a1&amp;ownerId=c3089ada-f0ea-4685-a8a1-9cf18b151f2e" target="_blank" rel="noopener noreferrer">Report bug</a><a class="button ghost" href="https://dev.azure.com/PG-PSDC/Control%20and%20Protection%20System%20Base/_workitems/create/Issue?templateId=ef7abe6e-fcd8-42a5-9694-4abb6abe16a1&amp;ownerId=c3089ada-f0ea-4685-a8a1-9cf18b151f2e" target="_blank" rel="noopener noreferrer">Request feature</a></div></header>
+  <section class="metric-row"><article><span>Source</span><strong id="sourceMetric">Not configured</strong></article><article><span>Destinations</span><strong id="destinationMetric">1</strong></article><article><span>Selected items</span><strong id="itemMetric">0</strong></article><article><span>Direction</span><strong>Source → destinations</strong></article></section>
 
   <section class="panel" id="connection">
     <div class="section-heading"><div><span class="step">1</span><h2>Projects and access</h2></div><span class="section-status" id="connectionStatus">Not validated</span></div>
@@ -19,7 +19,7 @@
       <label class="remember-row"><input id="rememberPat" type="checkbox"><span><strong>Remember PAT</strong></span></label>
       <div class="panel-actions"><button class="button primary" id="validateButton">Validate</button><button class="text-button" id="disconnectButton">Clear session</button><button class="text-button danger" id="deleteStoredPat">Remove saved PAT</button></div>
     </div><div>
-      <label class="field"><span>Source project</span><input id="source" type="url" value="https://dev.azure.com/PG-PSDC/TestProject1_Base"></label>
+      <label class="field"><span>Source project</span><input id="source" type="url" value="" placeholder="https://dev.azure.com/organization/project"></label>
       <div class="destination-head"><h3>Destination projects</h3><button class="text-button" id="addDestination" type="button">＋ Add</button></div><div id="destinationList" class="destination-list"></div>
     </div></div>
   </section>
@@ -40,6 +40,4 @@
 
   <section class="result-panel hidden" id="results" aria-live="polite"><div class="result-head"><div><span class="success-mark">✓</span><div><h2 id="resultTitle">Preview complete</h2><p id="resultMessage"></p></div></div><button class="icon-button" id="closeResults">Close</button></div><div class="result-grid" id="resultGrid"></div><div class="change-details hidden" id="changeDetails"><h3>Work-item changes</h3><div class="table-wrap result-table-wrap"><table><thead><tr><th>Source ID</th><th>Title</th><th>Type</th><th>Destination</th><th>Destination ID</th><th>Action</th><th>Status</th></tr></thead><tbody id="changeRows"></tbody></table></div></div></section>
   <footer><span>Azure WorkSync</span><span>PATs are session-only unless saved in Windows Credential Manager</span></footer>
-</main><div class="toast hidden" id="toast" role="status"></div>
-<dialog id="helpDialog"><button class="dialog-close" aria-label="Close">×</button><p class="eyebrow">Azure WorkSync</p><h2>One source, many destinations</h2><ol><li>Validate a PAT with Work Items: Read &amp; write.</li><li>Load and select source work items.</li><li>Preview every planned change.</li><li>Activate and synchronize.</li></ol><p>The app tracks destination IDs, copies supported fields and mapped links, and never changes destination workflow states.</p></dialog>
-<script src="{{ url_for('static', filename='app.js') }}"></script></body></html>
+</main><div class="toast hidden" id="toast" role="status"></div><script src="{{ url_for('static', filename='app.js') }}"></script></body></html>

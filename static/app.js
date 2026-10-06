@@ -1,10 +1,6 @@
 const state = {
   items: [],
-  destinations: [
-    "https://dev.azure.com/PG-PSDC/TestProject2_Link1",
-    "https://dev.azure.com/PG-PSDC/TestProject3_Link2",
-    "https://dev.azure.com/PG-PSDC/TestProject3_Link3"
-  ]
+  destinations: [""]
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -24,7 +20,7 @@ function renderDestinations() {
   $("#destinationList").innerHTML = state.destinations.map((url, index) => `
     <div class="destination-row">
       <span class="destination-number">${index + 1}</span>
-      <input type="url" value="${escapeHtml(url)}" aria-label="Destination project ${index + 1}" data-destination="${index}">
+      <input type="url" value="${escapeHtml(url)}" placeholder="https://dev.azure.com/organization/project" aria-label="Destination project ${index + 1}" data-destination="${index}">
       <button class="remove-destination" type="button" data-remove="${index}" aria-label="Remove destination ${index + 1}">×</button>
     </div>`).join("");
   $("#destinationMetric").textContent = state.destinations.length;
@@ -47,7 +43,7 @@ function renderItems(filter = "") {
 
 function updateMetrics() {
   $("#itemMetric").textContent = state.items.filter(item => item.selected).length;
-  try { const parts = new URL($("#source").value).pathname.split("/").filter(Boolean); $("#sourceMetric").textContent = parts.at(-1) || "Source"; } catch { $("#sourceMetric").textContent = "Source"; }
+  try { const parts = new URL($("#source").value).pathname.split("/").filter(Boolean); $("#sourceMetric").textContent = parts.at(-1) || "Not configured"; } catch { $("#sourceMetric").textContent = "Not configured"; }
 }
 
 function currentConfig() {
@@ -190,11 +186,4 @@ $("#runButton").addEventListener("click", async () => {
   finally { button.disabled = !$("#liveWrites").checked; button.textContent = "Synchronize"; }
 });
 $("#closeResults").addEventListener("click", () => $("#results").classList.add("hidden"));
-$$('.nav-item').forEach(button => button.addEventListener("click", () => {
-  $$('.nav-item').forEach(item => item.classList.remove("active")); button.classList.add("active");
-  document.getElementById(button.dataset.target).scrollIntoView({behavior:"smooth"});
-}));
-$("#helpButton").addEventListener("click", () => $("#helpDialog").showModal());
-$(".dialog-close").addEventListener("click", () => $("#helpDialog").close());
-
 init().catch(() => showToast("The app could not finish loading.", true));
