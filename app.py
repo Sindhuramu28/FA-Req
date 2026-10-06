@@ -153,14 +153,26 @@ def parse_project_url(raw_url: str) -> ProjectRef:
     return ProjectRef(organization, project, normalized)
 
 
+def validate_project_direction(source: ProjectRef, destinations: list[ProjectRef]) -> None:
+    source_key = (source.organization.casefold(), source.project.casefold())
+    destination_keys = [
+        (item.organization.casefold(), item.project.casefold()) for item in destinations
+    ]
+    if source_key in destination_keys:
+        raise ValueError("The source project cannot also be a destination project.")
+    if len(destination_keys) != len(set(destination_keys)):
+        raise ValueError("Each destination project can be added only once.")
+
+
 def azure_request(
     ref: ProjectRef,
     pat: str,
     path: str,
     *,
     method: str = "GET",
-    payload: dict[str, Any] | None = None,
+    payload: Any | None = None,
     project_scoped: bool = True,
+    content_type: str = "application/json",
 ) -> Any:
     token = base64.b64encode(f":{pat}".encode()).decode()
     data = json.dumps(payload).encode() if payload is not None else None
@@ -174,8 +186,8 @@ def azure_request(
         headers={
             "Authorization": f"Basic {token}",
             "Accept": "application/json",
-            "Content-Type": "application/json",
-            "User-Agent": "FA-Sync-Demo/1.0",
+            "Content-Type": content_type,
+            "User-Agent": "FA-Sync-Console/1.0",
         },
     )
     try:
@@ -191,12 +203,11 @@ def azure_request(
         if exc.code in (401, 403):
             raise PermissionError(
                 f"Authentication failed for {ref.project}. Check that the PAT is valid for "
-                f"the {ref.organization} organization and that your user can access this project."
+                f"the {ref.organization} organization, has Work Items: Read & write scope, "
+                f"and that your user can access this project."
             ) from exc
         if exc.code == 404:
-            raise ValueError(
-                f"Project '{ref.project}' was not found in organization '{ref.organization}'."
-            ) from exc
+            raise ValueError(detail or f"Azure resource was not found in project '{ref.project}'.") from exc
         raise RuntimeError(detail or f"Azure DevOps returned HTTP {exc.code}.") from exc
     except urllib.error.URLError as exc:
         raise ConnectionError("Azure DevOps could not be reached. Check the network and project URL.") from exc
@@ -265,6 +276,85 @@ def load_source_work_items(ref: ProjectRef, pat: str, marker: str) -> list[dict[
     return records
 
 
+def fetch_work_items(ref: ProjectRef, pat: str, ids: list[int]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for offset in range(0, len(ids), 200):
+        batch = ids[offset : offset + 200]
+        id_list = ",".join(str(item_id) for item_id in batch)
+        response = azure_request(
+            ref, pat,
+            f"_apis/wit/workitems?ids={id_list}&$expand=Relations&errorPolicy=Omit&api-version=7.1",
+        )
+        records.extend(response.get("value", []))
+    return records
+
+
+FIELD_MAP = {
+    "Title": "System.Title",
+    "Description": "System.Description",
+    "Tags": "System.Tags",
+}
+
+
+def work_item_patch(
+    item: dict[str, Any], selected_fields: list[str], *, include_hyperlinks: bool = True
+) -> list[dict[str, Any]]:
+    source_fields = item.get("fields", {})
+    operations: list[dict[str, Any]] = []
+    chosen = set(selected_fields) | {"Title"}
+    for label, reference_name in FIELD_MAP.items():
+        if label not in chosen or reference_name not in source_fields:
+            continue
+        operations.append({
+            "op": "add",
+            "path": f"/fields/{reference_name}",
+            "value": source_fields[reference_name],
+        })
+    if "Hyperlinks" in chosen and include_hyperlinks:
+        for relation in item.get("relations", []):
+            if relation.get("rel") == "Hyperlink" and relation.get("url"):
+                operations.append({
+                    "op": "add",
+                    "path": "/relations/-",
+                    "value": {
+                        "rel": "Hyperlink",
+                        "url": relation["url"],
+                        "attributes": {"comment": "Copied by FA Sync Console"},
+                    },
+                })
+    return operations
+
+
+def save_mapping(
+    source: ProjectRef,
+    destination: ProjectRef,
+    source_item: dict[str, Any],
+    destination_id: int,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    fields = source_item.get("fields", {})
+    with database() as db:
+        db.execute(
+            """INSERT INTO work_item_mappings (
+                source_organization, source_project, source_id,
+                destination_organization, destination_project, destination_id,
+                work_item_type, last_source_revision, first_synced_at,
+                last_synced_at, status, last_error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL)
+            ON CONFLICT(source_organization, source_project, source_id,
+                        destination_organization, destination_project)
+            DO UPDATE SET destination_id=excluded.destination_id,
+                          work_item_type=excluded.work_item_type,
+                          last_source_revision=excluded.last_source_revision,
+                          last_synced_at=excluded.last_synced_at,
+                          status='active', last_error=NULL""",
+            (source.organization, source.project, int(source_item["id"]),
+             destination.organization, destination.project, destination_id,
+             fields.get("System.WorkItemType", "Unknown"), source_item.get("rev"),
+             now, now),
+        )
+
+
 @app.after_request
 def secure_headers(response):
     response.headers["Cache-Control"] = "no-store"
@@ -329,8 +419,11 @@ def connect():
         return jsonify({"ok": False, "message": "Add at least one destination project."}), 400
 
     try:
-        projects = [("Source", parse_project_url(source_url))]
-        projects.extend((f"Destination {i + 1}", parse_project_url(url)) for i, url in enumerate(destination_urls))
+        source_ref = parse_project_url(source_url)
+        destination_refs = [parse_project_url(url) for url in destination_urls]
+        validate_project_direction(source_ref, destination_refs)
+        projects = [("Source", source_ref)]
+        projects.extend((f"Destination {i + 1}", ref) for i, ref in enumerate(destination_refs))
         results = []
         for label, ref in projects:
             project_name = urllib.parse.quote(ref.project, safe="")
@@ -373,6 +466,7 @@ def preview():
     try:
         source = parse_project_url(str(body.get("source", "")))
         destination_refs = [parse_project_url(str(url)) for url in destinations]
+        validate_project_direction(source, destination_refs)
     except ValueError as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
     item_details = {
@@ -427,7 +521,7 @@ def preview():
             "destinations": len(destinations),
             "creates": create_count,
             "updates": update_count,
-            "relationships": max(0, len(selected_ids) - 1) * len(destinations),
+            "relationships": 0,
             "fields": len(fields),
         },
         "changes": changes,
@@ -438,35 +532,128 @@ def preview():
 @app.post("/api/sync")
 def sync():
     body = request.get_json(silent=True) or {}
-    selected_ids = body.get("selectedIds", [])
+    try:
+        selected_ids = [int(item_id) for item_id in body.get("selectedIds", [])]
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "message": "Work item IDs must be valid numbers."}), 400
     destinations = body.get("destinations", [])
+    selected_fields = [str(field) for field in body.get("fields", [])]
     started = time.monotonic()
     if not selected_ids or not destinations:
         return jsonify({"ok": False, "message": "Work items and destinations are required."}), 400
+    if body.get("liveWrites") is not True or body.get("confirmation") != "SYNC":
+        return jsonify({
+            "ok": False,
+            "message": "Enable live writes and confirm the synchronization before running it.",
+        }), 400
 
-    # This prototype intentionally exercises the complete UI workflow without
-    # creating Azure work items. Production writes require an approved field,
-    # identity, conflict, deletion, and relationship mapping policy.
-    entries = []
-    for index, url in enumerate(destinations):
-        try:
-            ref = parse_project_url(url)
-            entries.append({
-                "destination": ref.project,
-                "status": "Dry run complete",
-                "created": max(1, round(len(selected_ids) * 0.67)),
-                "updated": len(selected_ids) - max(1, round(len(selected_ids) * 0.67)),
-                "failed": 0,
-            })
-        except ValueError:
-            entries.append({"destination": f"Destination {index + 1}", "status": "Invalid URL", "created": 0, "updated": 0, "failed": len(selected_ids)})
+    run_id = f"SYNC-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2).upper()}"
+    started_at = datetime.now(timezone.utc).isoformat()
+    try:
+        pat = session_pat()
+        source = parse_project_url(str(body.get("source", "")))
+        destination_refs = [parse_project_url(str(url)) for url in destinations]
+        validate_project_direction(source, destination_refs)
+        source_items = fetch_work_items(source, pat, selected_ids)
+        found_ids = {int(item["id"]) for item in source_items}
+        missing_ids = sorted(set(selected_ids) - found_ids)
+        if missing_ids:
+            raise ValueError(f"Source work items could not be loaded: {', '.join(map(str, missing_ids))}.")
+    except (ValueError, PermissionError, ConnectionError, RuntimeError) as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
 
+    with database() as db:
+        db.execute(
+            """INSERT INTO sync_runs
+               (run_id, started_at, mode, source_project, destinations, status)
+               VALUES (?, ?, 'live', ?, ?, 'running')""",
+            (run_id, started_at, source.project, len(destination_refs)),
+        )
+
+    entries: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
+    totals = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+    for destination in destination_refs:
+        destination_totals = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+        for item in source_items:
+            source_id = int(item["id"])
+            source_fields = item.get("fields", {})
+            title = source_fields.get("System.Title", "Untitled")
+            item_type = source_fields.get("System.WorkItemType", "Unknown")
+            with database() as db:
+                mapping = db.execute(
+                    """SELECT destination_id FROM work_item_mappings
+                       WHERE source_organization=? AND source_project=? AND source_id=?
+                       AND destination_organization=? AND destination_project=?""",
+                    (source.organization, source.project, source_id,
+                     destination.organization, destination.project),
+                ).fetchone()
+            destination_id = int(mapping["destination_id"]) if mapping else None
+            action = "Update" if destination_id is not None else "Create"
+            try:
+                patch = work_item_patch(
+                    item, selected_fields, include_hyperlinks=destination_id is None
+                )
+                if destination_id is None:
+                    encoded_type = urllib.parse.quote(str(item_type), safe="")
+                    response = azure_request(
+                        destination, pat,
+                        f"_apis/wit/workitems/${encoded_type}?api-version=7.1",
+                        method="POST", payload=patch,
+                        content_type="application/json-patch+json",
+                    )
+                    destination_id = int(response["id"])
+                    destination_totals["created"] += 1
+                    totals["created"] += 1
+                else:
+                    response = azure_request(
+                        destination, pat,
+                        f"_apis/wit/workitems/{destination_id}?api-version=7.1",
+                        method="PATCH", payload=patch,
+                        content_type="application/json-patch+json",
+                    )
+                    destination_id = int(response.get("id", destination_id))
+                    destination_totals["updated"] += 1
+                    totals["updated"] += 1
+                save_mapping(source, destination, item, destination_id)
+                results.append({
+                    "sourceId": source_id, "title": title, "type": item_type,
+                    "destination": destination.project, "destinationId": destination_id,
+                    "action": action, "status": "Success", "error": "",
+                })
+            except (ValueError, PermissionError, ConnectionError, RuntimeError, KeyError) as exc:
+                destination_totals["failed"] += 1
+                totals["failed"] += 1
+                results.append({
+                    "sourceId": source_id, "title": title, "type": item_type,
+                    "destination": destination.project, "destinationId": destination_id,
+                    "action": action, "status": "Failed", "error": str(exc),
+                })
+        entries.append({
+            "destination": destination.project,
+            "status": "Completed" if destination_totals["failed"] == 0 else "Completed with errors",
+            **destination_totals,
+        })
+
+    completed_at = datetime.now(timezone.utc).isoformat()
+    run_status = "completed" if totals["failed"] == 0 else "completed_with_errors"
+    with database() as db:
+        db.execute(
+            """UPDATE sync_runs SET completed_at=?, created_count=?, updated_count=?,
+               skipped_count=?, failed_count=?, status=? WHERE run_id=?""",
+            (completed_at, totals["created"], totals["updated"], totals["skipped"],
+             totals["failed"], run_status, run_id),
+        )
     return jsonify({
         "ok": True,
-        "runId": f"SYNC-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}",
+        "runId": run_id,
         "duration": f"{max(1, round((time.monotonic() - started) * 1000))} ms",
         "entries": entries,
-        "message": "Safe demo run finished. No Azure DevOps work items were created or changed.",
+        "results": results,
+        "message": (
+            f"Live synchronization finished: {totals['created']} created, "
+            f"{totals['updated']} updated, {totals['failed']} failed. Destination states were not changed."
+        ),
     })
 
 

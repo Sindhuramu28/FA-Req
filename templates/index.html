@@ -26,7 +26,7 @@
       </nav>
       <div class="sidebar-note">
         <span class="status-dot"></span>
-        <div><strong>Demo mode</strong><small>Writes are disabled</small></div>
+        <div><strong id="sidebarMode">Preview mode</strong><small id="sidebarModeNote">Writes require confirmation</small></div>
       </div>
     </aside>
 
@@ -37,7 +37,7 @@
           <h1>FA Sync Console</h1>
         </div>
         <div class="top-actions">
-          <span class="mode-pill"><i></i> Safe dry run</span>
+          <span class="mode-pill" id="modePill"><i></i> Preview mode</span>
           <button class="button ghost" id="helpButton">How it works</button>
         </div>
       </header>
@@ -97,33 +97,36 @@
           <div class="check-list" id="fieldList">
             <label><input type="checkbox" value="Title" checked disabled><span><strong>Title</strong></span></label>
             <label><input type="checkbox" value="Description" checked><span><strong>Description</strong></span></label>
-            <label><input type="checkbox" value="Impact assessment" checked><span><strong>Impact assessment</strong></span></label>
+            <label><input type="checkbox" value="Impact assessment" disabled><span><strong>Impact assessment</strong><small>Requires custom-field mapping</small></span></label>
             <label><input type="checkbox" value="Hyperlinks" checked><span><strong>Hyperlinks</strong></span></label>
             <label><input type="checkbox" value="Tags" checked><span><strong>Tags</strong></span></label>
-            <label><input type="checkbox" value="Discussions"><span><strong>Discussions</strong></span></label>
+            <label><input type="checkbox" value="Discussions" disabled><span><strong>Discussions</strong><small>Not synchronized</small></span></label>
           </div>
           <div class="locked-row"><span>State</span><strong>Never synchronized</strong></div>
-          <label class="switch-row"><span><strong>Preserve relationships</strong></span><input id="relations" type="checkbox" checked><i></i></label>
+          <label class="switch-row"><span><strong>Preserve hierarchy relationships</strong><small>Coming in a later version</small></span><input id="relations" type="checkbox" disabled><i></i></label>
         </section>
 
         <section class="panel" id="schedule">
           <div class="section-heading"><div><span class="step">04</span><h2>Set a cadence</h2></div></div>
-          <label class="switch-row"><span><strong>Scheduled synchronization</strong></span><input id="scheduleEnabled" type="checkbox" checked><i></i></label>
+          <label class="switch-row"><span><strong>Scheduled synchronization</strong><small>Coming in a later version</small></span><input id="scheduleEnabled" type="checkbox" disabled><i></i></label>
           <div class="form-grid schedule-grid">
             <label class="field"><span>Frequency</span><select id="frequency"><option>Daily</option><option>Every 6 hours</option><option>Weekly</option></select></label>
             <label class="field"><span>Time</span><input id="syncTime" type="time" value="02:00"></label>
             <label class="field full"><span>Timezone</span><select id="timezone"><option>Europe/Berlin</option><option>UTC</option><option>Asia/Kolkata</option></select></label>
           </div>
-          <div class="next-run"><span>Next scheduled run</span><strong id="nextRun">Tomorrow at 02:00</strong></div>
+          <div class="next-run"><span>Current run mode</span><strong id="nextRun">Manual only</strong></div>
         </section>
       </section>
 
       <section class="panel run-panel" id="run">
         <div class="run-copy">
           <span class="step">05</span>
-          <div><h2>Ready for a safe preview</h2></div>
+          <div><h2>Preview first, then synchronize</h2><p>Live mode creates or updates the selected items in every destination. Destination states remain untouched.</p></div>
         </div>
-        <div class="run-actions"><button class="button secondary" id="previewButton">Preview changes</button><button class="button primary" id="runButton">Run dry sync <span>→</span></button></div>
+        <div class="live-controls">
+          <label class="switch-row live-write-switch"><span><strong>Enable live writes</strong><small>Requires Work Items: Read &amp; write PAT scope</small></span><input id="liveWrites" type="checkbox"><i></i></label>
+          <div class="run-actions"><button class="button secondary" id="previewButton">Preview changes</button><button class="button primary" id="runButton" disabled>Synchronize now <span>→</span></button></div>
+        </div>
       </section>
 
       <section class="result-panel hidden" id="results" aria-live="polite">
@@ -133,18 +136,18 @@
           <h3>Planned work-item changes</h3>
           <div class="table-wrap result-table-wrap">
             <table>
-              <thead><tr><th>Source ID</th><th>Title</th><th>Type</th><th>Destination</th><th>Destination ID</th><th>Action</th></tr></thead>
+              <thead><tr><th>Source ID</th><th>Title</th><th>Type</th><th>Destination</th><th>Destination ID</th><th>Action</th><th>Status</th></tr></thead>
               <tbody id="changeRows"></tbody>
             </table>
           </div>
         </div>
       </section>
 
-      <footer><span>FA Sync Console · Python demo</span><span>PATs are session-only · Azure writes disabled</span></footer>
+      <footer><span>FA Sync Console · Python</span><span>PATs are session-only · Destination states are never synchronized</span></footer>
     </main>
   </div>
   <div class="toast hidden" id="toast" role="status"></div>
-  <dialog id="helpDialog"><button class="dialog-close" aria-label="Close">×</button><p class="eyebrow">How it works</p><h2>One source. Many destinations.</h2><ol><li>Enter a PAT and validate project access.</li><li>Select the FA work items and fields to carry forward.</li><li>Preview creates, updates, and relationship links.</li><li>Run a safe dry sync and review each destination.</li></ol><p>Production writes remain intentionally disabled until conflict, deletion, identity, and custom-field rules are approved.</p></dialog>
+  <dialog id="helpDialog"><button class="dialog-close" aria-label="Close">×</button><p class="eyebrow">How it works</p><h2>One source. Many destinations.</h2><ol><li>Enter a PAT with Work Items: Read &amp; write and validate access.</li><li>Load and select any Epic, Feature, Requirement, Task, or other supported work-item type.</li><li>Preview every planned create or update.</li><li>Enable live writes, confirm, and synchronize.</li></ol><p>The app saves source-to-destination ID mappings locally so later runs update the correct items. Destination workflow states are never changed.</p></dialog>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

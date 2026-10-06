@@ -56,7 +56,8 @@ function currentConfig() {
     selectedIds: selectedItems.map(item => item.id),
     selectedItems: selectedItems.map(item => ({id: item.id, title: item.title, type: item.type, rev: item.rev})),
     fields: $$("#fieldList input:checked").map(input => input.value),
-    preserveRelationships: $("#relations").checked
+    preserveRelationships: $("#relations").checked,
+    liveWrites: $("#liveWrites").checked
   };
 }
 
@@ -73,10 +74,10 @@ function showPreview(data) {
   $("#resultMessage").textContent = data.message;
   $("#resultGrid").innerHTML = [
     ["Work items", s.items, "Selected"], ["Destinations", s.destinations, "Configured"],
-    ["Creates", s.creates, "Expected"], ["Updates", s.updates, "Expected"], ["Relationships", s.relationships, "Rebuilt"]
+    ["Creates", s.creates, "Expected"], ["Updates", s.updates, "Expected"], ["Hierarchy links", s.relationships, "Not enabled"]
   ].map(([label,value,note]) => `<div class="result-stat"><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`).join("");
   $("#changeRows").innerHTML = (data.changes || []).map(change => `
-    <tr><td>${change.sourceId}</td><td>${change.title}</td><td>${change.type}</td><td>${change.destination}</td><td>${change.destinationId || "—"}</td><td><span class="action-chip ${change.action.toLowerCase()}">${change.action}</span></td></tr>`).join("");
+    <tr><td>${change.sourceId}</td><td>${change.title}</td><td>${change.type}</td><td>${change.destination}</td><td>${change.destinationId || "—"}</td><td><span class="action-chip ${change.action.toLowerCase()}">${change.action}</span></td><td>${change.status || "Planned"}${change.error ? `<br><small class="error-text">${change.error}</small>` : ""}</td></tr>`).join("");
   $("#changeDetails").classList.toggle("hidden", !(data.changes || []).length);
   $("#results").classList.remove("hidden");
   $("#results").scrollIntoView({behavior: "smooth", block: "center"});
@@ -145,23 +146,34 @@ $("#disconnectButton").addEventListener("click", async () => {
 $("#previewButton").addEventListener("click", async () => {
   try { showPreview(await post("/api/preview", currentConfig())); } catch (error) { showToast(error.message, true); }
 });
+$("#liveWrites").addEventListener("change", event => {
+  const enabled = event.target.checked;
+  $("#runButton").disabled = !enabled;
+  $("#modePill").innerHTML = `<i></i> ${enabled ? "Live writes enabled" : "Preview mode"}`;
+  $("#sidebarMode").textContent = enabled ? "Live mode" : "Preview mode";
+  $("#sidebarModeNote").textContent = enabled ? "Azure writes enabled" : "Writes require confirmation";
+});
 $("#runButton").addEventListener("click", async () => {
-  const button = $("#runButton"); button.disabled = true; button.textContent = "Running dry sync…";
+  if (!$("#liveWrites").checked) return showToast("Enable live writes before synchronizing.", true);
+  if (!window.confirm("Create or update the selected work items in every destination project? Destination states will not be changed.")) return;
+  const button = $("#runButton"); button.disabled = true; button.textContent = "Synchronizing…";
   try {
-    const data = await post("/api/sync", currentConfig());
+    const payload = currentConfig(); payload.confirmation = "SYNC";
+    const data = await post("/api/sync", payload);
     const totals = data.entries.reduce((sum,row) => ({created:sum.created+row.created,updated:sum.updated+row.updated,failed:sum.failed+row.failed}), {created:0,updated:0,failed:0});
-    $("#resultTitle").textContent = "Dry sync complete"; $("#resultMessage").textContent = `${data.runId} · ${data.message}`;
+    $("#resultTitle").textContent = "Synchronization complete"; $("#resultMessage").textContent = `${data.runId} · ${data.message}`;
     $("#resultGrid").innerHTML = [
-      ["Destinations", data.entries.length, "Processed"], ["Created", totals.created, "Simulated"], ["Updated", totals.updated, "Simulated"],
+      ["Destinations", data.entries.length, "Processed"], ["Created", totals.created, "Azure items"], ["Updated", totals.updated, "Azure items"],
       ["Failed", totals.failed, "Items"], ["Duration", data.duration, "Total"]
     ].map(([label,value,note]) => `<div class="result-stat"><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`).join("");
-    $("#changeDetails").classList.add("hidden");
+    $("#changeRows").innerHTML = (data.results || []).map(change => `
+      <tr><td>${change.sourceId}</td><td>${change.title}</td><td>${change.type}</td><td>${change.destination}</td><td>${change.destinationId || "—"}</td><td><span class="action-chip ${change.action.toLowerCase()}">${change.action}</span></td><td>${change.status}${change.error ? `<br><small class="error-text">${change.error}</small>` : ""}</td></tr>`).join("");
+    $("#changeDetails").classList.remove("hidden");
     $("#results").classList.remove("hidden"); $("#results").scrollIntoView({behavior:"smooth",block:"center"});
   } catch (error) { showToast(error.message, true); }
-  finally { button.disabled = false; button.innerHTML = "Run dry sync <span>→</span>"; }
+  finally { button.disabled = !$("#liveWrites").checked; button.innerHTML = "Synchronize now <span>→</span>"; }
 });
 $("#closeResults").addEventListener("click", () => $("#results").classList.add("hidden"));
-$("#syncTime").addEventListener("input", event => $("#nextRun").textContent = `Tomorrow at ${event.target.value || "02:00"}`);
 $$('.nav-item').forEach(button => button.addEventListener("click", () => {
   $$('.nav-item').forEach(item => item.classList.remove("active")); button.classList.add("active");
   document.getElementById(button.dataset.target).scrollIntoView({behavior:"smooth"});

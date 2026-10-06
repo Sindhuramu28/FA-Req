@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app import app, load_source_work_items, parse_project_url
+from app import app, load_source_work_items, parse_project_url, work_item_patch
 
 
 class AppTests(unittest.TestCase):
@@ -45,6 +45,66 @@ class AppTests(unittest.TestCase):
         response = self.client.get("/api/demo-items")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json["items"]), 6)
+
+    def test_work_item_patch_never_copies_state(self):
+        patch_document = work_item_patch({
+            "fields": {
+                "System.Title": "FA_test1",
+                "System.Description": "Description",
+                "System.State": "Closed",
+                "System.Tags": "FA",
+            },
+            "relations": [],
+        }, ["Title", "Description", "Tags"])
+        paths = [operation["path"] for operation in patch_document]
+        self.assertIn("/fields/System.Title", paths)
+        self.assertIn("/fields/System.Description", paths)
+        self.assertIn("/fields/System.Tags", paths)
+        self.assertNotIn("/fields/System.State", paths)
+
+    def test_live_sync_requires_explicit_confirmation(self):
+        response = self.client.post("/api/sync", json={
+            "source": "https://dev.azure.com/example/source",
+            "selectedIds": [12],
+            "destinations": ["https://dev.azure.com/example/destination"],
+            "liveWrites": True,
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("confirm", response.json["message"].lower())
+
+    @patch("app.save_mapping")
+    @patch("app.azure_request")
+    @patch("app.fetch_work_items")
+    @patch("app.session_pat", return_value="write-pat")
+    def test_live_sync_creates_item_without_copying_state(
+        self, session_pat, fetch_work_items, azure_request, save_mapping
+    ):
+        fetch_work_items.return_value = [{
+            "id": 12,
+            "rev": 4,
+            "fields": {
+                "System.WorkItemType": "Task",
+                "System.Title": "FA_test1",
+                "System.Description": "Test",
+                "System.State": "Closed",
+            },
+            "relations": [],
+        }]
+        azure_request.return_value = {"id": 99}
+        response = self.client.post("/api/sync", json={
+            "source": "https://dev.azure.com/example/source",
+            "selectedIds": [12],
+            "destinations": ["https://dev.azure.com/example/destination"],
+            "fields": ["Title", "Description"],
+            "liveWrites": True,
+            "confirmation": "SYNC",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["results"][0]["destinationId"], 99)
+        request_patch = azure_request.call_args.kwargs["payload"]
+        self.assertNotIn("/fields/System.State", [op["path"] for op in request_patch])
+        self.assertEqual(azure_request.call_args.kwargs["content_type"], "application/json-patch+json")
+        save_mapping.assert_called_once()
 
     def test_live_items_require_validated_session(self):
         response = self.client.post("/api/work-items", json={
