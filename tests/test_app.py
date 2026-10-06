@@ -60,6 +60,7 @@ class AppTests(unittest.TestCase):
         items = load_source_work_items(ref, "test-pat", "manual")
         query = azure_request.call_args_list[0].kwargs["payload"]["query"]
         self.assertNotIn("System.WorkItemType", query)
+        self.assertIn("[System.TeamProject] = @project", query)
         self.assertEqual(items[0]["type"], "Task")
 
 

@@ -220,11 +220,17 @@ def wiql_escape(value: str) -> str:
 
 
 def load_source_work_items(ref: ProjectRef, pat: str, marker: str) -> list[dict[str, Any]]:
-    conditions: list[str] = []
+    # Explicitly scope WIQL to the project. Some Azure DevOps organizations
+    # return an empty result for a project endpoint query without a WHERE
+    # clause, while @project works consistently across inherited processes.
+    conditions: list[str] = ["[System.TeamProject] = @project"]
     if marker == "tag":
         conditions.append("[System.Tags] CONTAINS 'FA'")
-    where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-    query = f"SELECT [System.Id] FROM WorkItems{where_clause} ORDER BY [System.Id]"
+    query = (
+        "SELECT [System.Id] FROM WorkItems WHERE "
+        + " AND ".join(conditions)
+        + " ORDER BY [System.Id]"
+    )
     result = azure_request(
         ref,
         pat,
@@ -289,6 +295,16 @@ def work_items():
                 "message": "The first live version supports Tag: FA or Manual selection.",
             }), 400
         items = load_source_work_items(ref, session_pat(), marker)
+        if not items:
+            return jsonify({
+                "ok": True,
+                "items": [],
+                "mode": "live",
+                "message": (
+                    f"Azure returned 0 work items for {ref.project}. Confirm that the PAT owner "
+                    "can open Boards > Work Items in this project and that All work items is selected."
+                ),
+            })
         return jsonify({
             "ok": True,
             "items": items,
