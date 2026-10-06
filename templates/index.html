@@ -1,153 +1,45 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Configure and preview one-way Azure DevOps FA work-item synchronization.">
-  <title>FA Sync Console</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Synchronize Azure DevOps work items from one source to multiple destinations.">
+  <title>Azure WorkSync</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
-  <div class="app-shell">
-    <aside class="sidebar">
-      <a class="brand" href="#top" aria-label="FA Sync home">
-        <span class="brand-mark">FA</span>
-        <span><strong>Sync Console</strong><small>Azure DevOps</small></span>
-      </a>
-      <nav aria-label="Setup sections">
-        <button class="nav-item active" data-target="connection"><span>01</span>Connection</button>
-        <button class="nav-item" data-target="scope"><span>02</span>FA scope</button>
-        <button class="nav-item" data-target="mapping"><span>03</span>Mapping</button>
-        <button class="nav-item" data-target="schedule"><span>04</span>Schedule</button>
-        <button class="nav-item" data-target="run"><span>05</span>Run & review</button>
-      </nav>
-      <div class="sidebar-note">
-        <span class="status-dot"></span>
-        <div><strong id="sidebarMode">Preview mode</strong><small id="sidebarModeNote">Writes require confirmation</small></div>
-      </div>
-    </aside>
+<body><main>
+  <header class="topbar"><div class="brand-block"><span class="brand-mark">AW</span><div><p class="eyebrow">Azure DevOps synchronization</p><h1>Azure WorkSync</h1></div></div><button class="button ghost" id="helpButton">How it works</button></header>
+  <section class="metric-row"><article><span>Source</span><strong id="sourceMetric">TestProject1_Base</strong></article><article><span>Destinations</span><strong id="destinationMetric">3</strong></article><article><span>Selected items</span><strong id="itemMetric">0</strong></article><article><span>Direction</span><strong>Source → destinations</strong></article></section>
 
-    <main id="top">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Unidirectional work-item synchronization</p>
-          <h1>FA Sync Console</h1>
-        </div>
-        <div class="top-actions">
-          <span class="mode-pill" id="modePill"><i></i> Preview mode</span>
-          <button class="button ghost" id="helpButton">How it works</button>
-        </div>
-      </header>
+  <section class="panel" id="connection">
+    <div class="section-heading"><div><span class="step">1</span><h2>Projects and access</h2></div><span class="section-status" id="connectionStatus">Not validated</span></div>
+    <div class="connection-grid"><div>
+      <label class="field"><span>Personal Access Token</span><span class="input-wrap"><input id="pat" type="password" autocomplete="new-password" placeholder="Paste PAT or use saved credential"><button class="icon-button" id="togglePat" type="button">Show</button></span></label>
+      <label class="remember-row"><input id="rememberPat" type="checkbox"><span><strong>Remember securely</strong><small id="credentialStatus">Uses Windows Credential Manager, never app files</small></span></label>
+      <div class="panel-actions"><button class="button primary" id="validateButton">Validate</button><button class="text-button" id="disconnectButton">Clear session</button><button class="text-button danger" id="deleteStoredPat">Remove saved PAT</button></div>
+    </div><div>
+      <label class="field"><span>Source project</span><input id="source" type="url" value="https://dev.azure.com/PG-PSDC/TestProject1_Base"></label>
+      <div class="destination-head"><h3>Destination projects</h3><button class="text-button" id="addDestination" type="button">＋ Add</button></div><div id="destinationList" class="destination-list"></div>
+    </div></div>
+  </section>
 
-      <section class="metric-row" aria-label="Configuration summary">
-        <article><span>Source</span><strong id="sourceMetric">TestProject1_Base</strong></article>
-        <article><span>Destinations</span><strong id="destinationMetric">3</strong></article>
-        <article><span>FA items</span><strong id="itemMetric">6</strong></article>
-        <article><span>Direction</span><strong>One way</strong></article>
-      </section>
+  <section class="panel" id="scope">
+    <div class="section-heading"><div><span class="step">2</span><h2>Select source work items</h2></div><span class="section-status" id="scopeStatus">Not loaded</span></div>
+    <div class="toolbar"><label class="search"><span>⌕</span><input id="searchItems" type="search" placeholder="Search by ID, type, or title"></label><label class="compact-field">Selection<select id="faMarker"><option value="manual">All work items</option><option value="tag">Source tag: FA</option></select></label><button class="button secondary" id="loadItems">Load items</button><button class="button ghost" id="selectAll">Select all</button></div>
+    <div class="table-wrap item-table-wrap"><table><thead><tr><th></th><th>ID</th><th>Type</th><th>Title</th><th>Source state</th><th>Children</th></tr></thead><tbody id="itemRows"></tbody></table></div>
+  </section>
 
-      <section class="panel" id="connection">
-        <div class="section-heading">
-          <div><span class="step">01</span><h2>Connect your projects</h2></div>
-          <span class="section-status" id="connectionStatus">Not validated</span>
-        </div>
-        <div class="form-grid">
-          <label class="field full">
-            <span>Personal Access Token</span>
-            <span class="input-wrap"><input id="pat" type="password" autocomplete="new-password" placeholder="Paste PAT for this session"><button class="icon-button" id="togglePat" type="button" aria-label="Show PAT">Show</button></span>
-          </label>
-          <label class="field full">
-            <span>Source project</span>
-            <input id="source" type="url" value="https://dev.azure.com/PG-PSDC/TestProject1_Base">
-          </label>
-        </div>
-        <div class="destination-head"><h3>Destination projects</h3><button class="text-button" id="addDestination" type="button">＋ Add destination</button></div>
-        <div id="destinationList" class="destination-list"></div>
-        <div class="panel-actions">
-          <button class="button secondary" id="validateButton">Validate connections</button>
-          <button class="text-button danger" id="disconnectButton" type="button">Clear session PAT</button>
-        </div>
-      </section>
-
-      <section class="panel" id="scope">
-        <div class="section-heading">
-          <div><span class="step">02</span><h2>Select FA work items</h2></div>
-          <span class="section-status" id="scopeStatus">Not loaded</span>
-        </div>
-        <div class="toolbar">
-          <label class="search"><span>⌕</span><input id="searchItems" type="search" placeholder="Search by ID, type, or title"></label>
-          <label class="compact-field">Selection method<select id="faMarker"><option value="manual">All work items</option><option value="tag">Tag: FA (optional)</option><option value="area">Area path (coming next)</option><option value="custom">Custom field (coming next)</option></select></label>
-          <button class="button secondary" id="loadItems">Load live items</button>
-          <button class="button ghost" id="selectAll">Select all</button>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th><span class="sr-only">Select</span></th><th>ID</th><th>Type</th><th>Title</th><th>Source state</th><th>Children</th></tr></thead>
-            <tbody id="itemRows"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="two-column">
-        <section class="panel" id="mapping">
-          <div class="section-heading"><div><span class="step">03</span><h2>Choose what moves</h2></div></div>
-          <div class="check-list" id="fieldList">
-            <label><input type="checkbox" value="Title" checked disabled><span><strong>Title</strong></span></label>
-            <label><input type="checkbox" value="Description" checked><span><strong>Description</strong></span></label>
-            <label><input type="checkbox" value="Impact assessment" disabled><span><strong>Impact assessment</strong><small>Requires custom-field mapping</small></span></label>
-            <label><input type="checkbox" value="Hyperlinks" checked><span><strong>Hyperlinks</strong></span></label>
-            <label><input type="checkbox" value="Tags" checked><span><strong>Tags</strong></span></label>
-            <label><input type="checkbox" value="Discussions" disabled><span><strong>Discussions</strong><small>Not synchronized</small></span></label>
-          </div>
-          <div class="locked-row"><span>State</span><strong>Never synchronized</strong></div>
-          <label class="switch-row"><span><strong>Preserve hierarchy relationships</strong><small>Coming in a later version</small></span><input id="relations" type="checkbox" disabled><i></i></label>
-        </section>
-
-        <section class="panel" id="schedule">
-          <div class="section-heading"><div><span class="step">04</span><h2>Set a cadence</h2></div></div>
-          <label class="switch-row"><span><strong>Scheduled synchronization</strong><small>Coming in a later version</small></span><input id="scheduleEnabled" type="checkbox" disabled><i></i></label>
-          <div class="form-grid schedule-grid">
-            <label class="field"><span>Frequency</span><select id="frequency"><option>Daily</option><option>Every 6 hours</option><option>Weekly</option></select></label>
-            <label class="field"><span>Time</span><input id="syncTime" type="time" value="02:00"></label>
-            <label class="field full"><span>Timezone</span><select id="timezone"><option>Europe/Berlin</option><option>UTC</option><option>Asia/Kolkata</option></select></label>
-          </div>
-          <div class="next-run"><span>Current run mode</span><strong id="nextRun">Manual only</strong></div>
-        </section>
-      </section>
-
-      <section class="panel run-panel" id="run">
-        <div class="run-copy">
-          <span class="step">05</span>
-          <div><h2>Preview first, then synchronize</h2><p>Live mode creates or updates the selected items in every destination. Destination states remain untouched.</p></div>
-        </div>
-        <div class="live-controls">
-          <label class="switch-row live-write-switch"><span><strong>Enable live writes</strong><small>Requires Work Items: Read &amp; write PAT scope</small></span><input id="liveWrites" type="checkbox"><i></i></label>
-          <div class="run-actions"><button class="button secondary" id="previewButton">Preview changes</button><button class="button primary" id="runButton" disabled>Synchronize now <span>→</span></button></div>
-        </div>
-      </section>
-
-      <section class="result-panel hidden" id="results" aria-live="polite">
-        <div class="result-head"><div><span class="success-mark">✓</span><div><h2 id="resultTitle">Preview complete</h2><p id="resultMessage"></p></div></div><button class="icon-button" id="closeResults" aria-label="Close results">Close</button></div>
-        <div class="result-grid" id="resultGrid"></div>
-        <div class="change-details hidden" id="changeDetails">
-          <h3>Planned work-item changes</h3>
-          <div class="table-wrap result-table-wrap">
-            <table>
-              <thead><tr><th>Source ID</th><th>Title</th><th>Type</th><th>Destination</th><th>Destination ID</th><th>Action</th><th>Status</th></tr></thead>
-              <tbody id="changeRows"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <footer><span>FA Sync Console · Python</span><span>PATs are session-only · Destination states are never synchronized</span></footer>
-    </main>
+  <div class="action-layout">
+    <section class="panel" id="mapping"><div class="section-heading"><div><span class="step">3</span><h2>Choose what moves</h2></div></div>
+      <div class="check-list" id="fieldList"><label><input type="checkbox" value="Title" checked><span><strong>Title</strong></span></label><label><input type="checkbox" value="Description" checked><span><strong>Description</strong></span></label><label><input type="checkbox" value="Impact assessment" checked><span><strong>Impact assessment</strong><small>Copied when the same custom field exists</small></span></label><label><input type="checkbox" value="Hyperlinks" checked><span><strong>Hyperlinks</strong></span></label><label><input type="checkbox" value="Tags" checked><span><strong>Tags</strong><small>Adds FA-Synced in destinations</small></span></label><label><input type="checkbox" value="Discussions"><span><strong>Discussions</strong><small>New source comments are copied once</small></span></label></div>
+      <div class="mapping-footer"><div class="locked-row"><span>Destination state</span><strong>Never changed</strong></div><label class="compact-check"><input id="relations" type="checkbox" checked><span>Copy mapped work-item links</span></label></div>
+    </section>
+    <section class="panel run-panel" id="run"><div><span class="step">4</span><h2>Review and synchronize</h2><p>Preview is always safe. Activate only when you are ready to change destination projects.</p></div><label class="activate-card"><span><strong>Activate</strong><small>Allow destination changes</small></span><input id="liveWrites" type="checkbox"><i></i></label><div class="run-actions"><button class="button secondary" id="previewButton">Preview changes</button><button class="button primary" id="runButton" disabled>Synchronize now</button></div></section>
   </div>
-  <div class="toast hidden" id="toast" role="status"></div>
-  <dialog id="helpDialog"><button class="dialog-close" aria-label="Close">×</button><p class="eyebrow">How it works</p><h2>One source. Many destinations.</h2><ol><li>Enter a PAT with Work Items: Read &amp; write and validate access.</li><li>Load and select any Epic, Feature, Requirement, Task, or other supported work-item type.</li><li>Preview every planned create or update.</li><li>Enable live writes, confirm, and synchronize.</li></ol><p>The app saves source-to-destination ID mappings locally so later runs update the correct items. Destination workflow states are never changed.</p></dialog>
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
-</body>
-</html>
+
+  <section class="result-panel hidden" id="results" aria-live="polite"><div class="result-head"><div><span class="success-mark">✓</span><div><h2 id="resultTitle">Preview complete</h2><p id="resultMessage"></p></div></div><button class="icon-button" id="closeResults">Close</button></div><div class="result-grid" id="resultGrid"></div><div class="change-details hidden" id="changeDetails"><h3>Work-item changes</h3><div class="table-wrap result-table-wrap"><table><thead><tr><th>Source ID</th><th>Title</th><th>Type</th><th>Destination</th><th>Destination ID</th><th>Action</th><th>Status</th></tr></thead><tbody id="changeRows"></tbody></table></div></div></section>
+  <footer><span>Azure WorkSync</span><span>PATs are session-only unless saved in Windows Credential Manager</span></footer>
+</main><div class="toast hidden" id="toast" role="status"></div>
+<dialog id="helpDialog"><button class="dialog-close" aria-label="Close">×</button><p class="eyebrow">Azure WorkSync</p><h2>One source, many destinations</h2><ol><li>Validate a PAT with Work Items: Read &amp; write.</li><li>Load and select source work items.</li><li>Preview every planned change.</li><li>Activate and synchronize.</li></ol><p>The app tracks destination IDs, copies supported fields and mapped links, and never changes destination workflow states.</p></dialog>
+<script src="{{ url_for('static', filename='app.js') }}"></script></body></html>

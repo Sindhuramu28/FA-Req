@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import ctypes
+from ctypes import wintypes
 import json
 import os
 import re
@@ -67,6 +69,55 @@ class PatVault:
 
 
 PAT_VAULT = PatVault()
+CREDENTIAL_TARGET = "Azure WorkSync PAT"
+DESTINATION_TAG = "FA-Synced"
+
+
+class CREDENTIALW(ctypes.Structure):
+    _fields_ = [
+        ("Flags", wintypes.DWORD), ("Type", wintypes.DWORD),
+        ("TargetName", wintypes.LPWSTR), ("Comment", wintypes.LPWSTR),
+        ("LastWritten", wintypes.FILETIME), ("CredentialBlobSize", wintypes.DWORD),
+        ("CredentialBlob", ctypes.POINTER(ctypes.c_byte)),
+        ("Persist", wintypes.DWORD), ("AttributeCount", wintypes.DWORD),
+        ("Attributes", ctypes.c_void_p), ("TargetAlias", wintypes.LPWSTR),
+        ("UserName", wintypes.LPWSTR),
+    ]
+
+
+def save_os_credential(pat: str) -> None:
+    if sys.platform != "win32":
+        raise RuntimeError("Secure PAT storage is available only on Windows.")
+    blob = pat.encode("utf-16-le")
+    buffer = ctypes.create_string_buffer(blob)
+    credential = CREDENTIALW()
+    credential.Type = 1  # CRED_TYPE_GENERIC
+    credential.TargetName = CREDENTIAL_TARGET
+    credential.CredentialBlobSize = len(blob)
+    credential.CredentialBlob = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_byte))
+    credential.Persist = 2  # CRED_PERSIST_LOCAL_MACHINE
+    credential.UserName = "Azure DevOps PAT"
+    if not ctypes.windll.advapi32.CredWriteW(ctypes.byref(credential), 0):
+        raise ctypes.WinError()
+
+
+def load_os_credential() -> str | None:
+    if sys.platform != "win32":
+        return None
+    pointer = ctypes.POINTER(CREDENTIALW)()
+    if not ctypes.windll.advapi32.CredReadW(CREDENTIAL_TARGET, 1, 0, ctypes.byref(pointer)):
+        return None
+    try:
+        credential = pointer.contents
+        raw = ctypes.string_at(credential.CredentialBlob, credential.CredentialBlobSize)
+        return raw.decode("utf-16-le")
+    finally:
+        ctypes.windll.advapi32.CredFree(pointer)
+
+
+def delete_os_credential() -> None:
+    if sys.platform == "win32":
+        ctypes.windll.advapi32.CredDeleteW(CREDENTIAL_TARGET, 1, 0)
 
 MOCK_ITEMS = [
     {"id": 1042, "type": "Epic", "title": "Unified customer onboarding", "state": "Active", "children": 2, "selected": True},
@@ -135,6 +186,20 @@ def initialize_database() -> None:
                 failed_count INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS synced_comments (
+                source_organization TEXT NOT NULL,
+                source_project TEXT NOT NULL,
+                source_id INTEGER NOT NULL,
+                source_comment_id INTEGER NOT NULL,
+                destination_organization TEXT NOT NULL,
+                destination_project TEXT NOT NULL,
+                destination_id INTEGER NOT NULL,
+                synced_at TEXT NOT NULL,
+                PRIMARY KEY (
+                    source_organization, source_project, source_id, source_comment_id,
+                    destination_organization, destination_project
+                )
+            );
             """
         )
 
@@ -187,7 +252,7 @@ def azure_request(
             "Authorization": f"Basic {token}",
             "Accept": "application/json",
             "Content-Type": content_type,
-            "User-Agent": "FA-Sync-Console/1.0",
+            "User-Agent": "Azure-WorkSync/1.0",
         },
     )
     try:
@@ -296,12 +361,23 @@ FIELD_MAP = {
 }
 
 
+def impact_field_reference(fields: dict[str, Any]) -> str | None:
+    for reference_name in fields:
+        normalized = re.sub(r"[^a-z]", "", reference_name.casefold())
+        if "impactassessment" in normalized:
+            return reference_name
+    return None
+
+
 def work_item_patch(
-    item: dict[str, Any], selected_fields: list[str], *, include_hyperlinks: bool = True
+    item: dict[str, Any], selected_fields: list[str], *, include_hyperlinks: bool = True,
+    require_title: bool = True,
 ) -> list[dict[str, Any]]:
     source_fields = item.get("fields", {})
     operations: list[dict[str, Any]] = []
-    chosen = set(selected_fields) | {"Title"}
+    chosen = set(selected_fields)
+    if require_title:
+        chosen.add("Title")
     for label, reference_name in FIELD_MAP.items():
         if label not in chosen or reference_name not in source_fields:
             continue
@@ -309,6 +385,28 @@ def work_item_patch(
             "op": "add",
             "path": f"/fields/{reference_name}",
             "value": source_fields[reference_name],
+        })
+    if "Impact assessment" in chosen:
+        reference_name = impact_field_reference(source_fields)
+        if reference_name:
+            operations.append({
+                "op": "add",
+                "path": f"/fields/{reference_name}",
+                "value": source_fields[reference_name],
+            })
+    tags_operation = next(
+        (operation for operation in operations if operation["path"] == "/fields/System.Tags"),
+        None,
+    )
+    source_tags = str(tags_operation["value"] if tags_operation else "")
+    tag_values = [value.strip() for value in source_tags.split(";") if value.strip()]
+    if DESTINATION_TAG.casefold() not in {value.casefold() for value in tag_values}:
+        tag_values.append(DESTINATION_TAG)
+    if tags_operation:
+        tags_operation["value"] = "; ".join(tag_values)
+    else:
+        operations.append({
+            "op": "add", "path": "/fields/System.Tags", "value": "; ".join(tag_values)
         })
     if "Hyperlinks" in chosen and include_hyperlinks:
         for relation in item.get("relations", []):
@@ -319,7 +417,7 @@ def work_item_patch(
                     "value": {
                         "rel": "Hyperlink",
                         "url": relation["url"],
-                        "attributes": {"comment": "Copied by FA Sync Console"},
+                        "attributes": {"comment": "Copied by Azure WorkSync"},
                     },
                 })
     return operations
@@ -353,6 +451,143 @@ def save_mapping(
              fields.get("System.WorkItemType", "Unknown"), source_item.get("rev"),
              now, now),
         )
+
+
+def related_work_item_id(url: str) -> int | None:
+    match = re.search(r"/workItems/(\d+)(?:\?.*)?$", url, re.I)
+    return int(match.group(1)) if match else None
+
+
+def destination_mappings(
+    source: ProjectRef, destination: ProjectRef, source_ids: list[int]
+) -> dict[int, int]:
+    if not source_ids:
+        return {}
+    placeholders = ",".join("?" for _ in source_ids)
+    with database() as db:
+        rows = db.execute(
+            f"""SELECT source_id, destination_id FROM work_item_mappings
+                WHERE source_organization=? AND source_project=?
+                AND destination_organization=? AND destination_project=?
+                AND source_id IN ({placeholders})""",
+            (source.organization, source.project, destination.organization,
+             destination.project, *source_ids),
+        ).fetchall()
+    return {int(row["source_id"]): int(row["destination_id"]) for row in rows}
+
+
+def synchronize_links(
+    source: ProjectRef,
+    destination: ProjectRef,
+    pat: str,
+    source_items: list[dict[str, Any]],
+) -> tuple[int, list[str]]:
+    selected_ids = [int(item["id"]) for item in source_items]
+    related_ids = {
+        target_id for item in source_items for relation in item.get("relations", [])
+        if (target_id := related_work_item_id(str(relation.get("url", "")))) is not None
+    }
+    mappings = destination_mappings(source, destination, selected_ids + sorted(related_ids))
+    copied = 0
+    errors: list[str] = []
+    for item in source_items:
+        source_id = int(item["id"])
+        destination_id = mappings.get(source_id)
+        if not destination_id:
+            continue
+        candidates = []
+        for relation in item.get("relations", []):
+            relation_type = str(relation.get("rel", ""))
+            target_source_id = related_work_item_id(str(relation.get("url", "")))
+            if not relation_type.startswith("System.LinkTypes.") or target_source_id not in mappings:
+                continue
+            candidates.append((relation_type, mappings[target_source_id]))
+        if not candidates:
+            continue
+        try:
+            current = azure_request(
+                destination, pat,
+                f"_apis/wit/workitems/{destination_id}?$expand=Relations&api-version=7.1",
+            )
+            existing = {
+                (str(link.get("rel", "")), related_work_item_id(str(link.get("url", ""))))
+                for link in current.get("relations", [])
+            }
+            patch = []
+            for relation_type, target_destination_id in candidates:
+                if (relation_type, target_destination_id) in existing:
+                    continue
+                patch.append({
+                    "op": "add", "path": "/relations/-",
+                    "value": {
+                        "rel": relation_type,
+                        "url": (
+                            f"https://dev.azure.com/{urllib.parse.quote(destination.organization)}"
+                            f"/{urllib.parse.quote(destination.project)}/_apis/wit/workItems/"
+                            f"{target_destination_id}"
+                        ),
+                        "attributes": {"comment": "Copied by Azure WorkSync"},
+                    },
+                })
+            if patch:
+                azure_request(
+                    destination, pat,
+                    f"_apis/wit/workitems/{destination_id}?api-version=7.1",
+                    method="PATCH", payload=patch,
+                    content_type="application/json-patch+json",
+                )
+                copied += len(patch)
+        except (ValueError, PermissionError, ConnectionError, RuntimeError) as exc:
+            errors.append(f"Links for source {source_id}: {exc}")
+    return copied, errors
+
+
+def synchronize_comments(
+    source: ProjectRef,
+    destination: ProjectRef,
+    pat: str,
+    source_item: dict[str, Any],
+    destination_id: int,
+) -> tuple[int, list[str]]:
+    source_id = int(source_item["id"])
+    copied = 0
+    errors: list[str] = []
+    try:
+        response = azure_request(
+            source, pat,
+            f"_apis/wit/workItems/{source_id}/comments?$top=200&api-version=7.1-preview.4",
+        )
+        for comment in response.get("comments", response.get("value", [])):
+            comment_id = int(comment["id"])
+            with database() as db:
+                exists = db.execute(
+                    """SELECT 1 FROM synced_comments WHERE source_organization=?
+                       AND source_project=? AND source_id=? AND source_comment_id=?
+                       AND destination_organization=? AND destination_project=?""",
+                    (source.organization, source.project, source_id, comment_id,
+                     destination.organization, destination.project),
+                ).fetchone()
+            if exists:
+                continue
+            author = comment.get("createdBy", {}).get("displayName", "Source user")
+            created = comment.get("createdDate", "")
+            text = f"Copied from source comment by {author} ({created})\n\n{comment.get('text', '')}"
+            azure_request(
+                destination, pat,
+                f"_apis/wit/workItems/{destination_id}/comments?format=markdown&api-version=7.1-preview.4",
+                method="POST", payload={"text": text},
+            )
+            with database() as db:
+                db.execute(
+                    """INSERT OR IGNORE INTO synced_comments VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (source.organization, source.project, source_id, comment_id,
+                     destination.organization, destination.project, destination_id,
+                     datetime.now(timezone.utc).isoformat()),
+                )
+            copied += 1
+    except (ValueError, PermissionError, ConnectionError, RuntimeError, KeyError) as exc:
+        errors.append(f"Discussions for source {source_id}: {exc}")
+    return copied, errors
 
 
 @app.after_request
@@ -402,7 +637,7 @@ def work_items():
             "mode": "live",
             "message": f"Loaded {len(items)} live work items from {ref.project}.",
         })
-    except (ValueError, PermissionError, ConnectionError, RuntimeError) as exc:
+    except (ValueError, PermissionError, ConnectionError, RuntimeError, OSError) as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
 
 
@@ -410,6 +645,9 @@ def work_items():
 def connect():
     body = request.get_json(silent=True) or {}
     pat = str(body.get("pat", "")).strip()
+    remember_pat = body.get("rememberPat") is True
+    if not pat and body.get("useStoredPat") is True:
+        pat = load_os_credential() or ""
     source_url = str(body.get("source", ""))
     destination_urls = body.get("destinations", [])
 
@@ -440,15 +678,25 @@ def connect():
                 "url": ref.url,
             })
         PAT_VAULT.put(session_id(), pat)
+        if remember_pat:
+            save_os_credential(pat)
         return jsonify({"ok": True, "message": f"Validated access to {len(results)} projects.", "projects": results})
-    except (ValueError, PermissionError, ConnectionError, RuntimeError) as exc:
+    except (ValueError, PermissionError, ConnectionError, RuntimeError, OSError) as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
 
 
 @app.post("/api/disconnect")
 def disconnect():
     PAT_VAULT.remove(session_id())
-    return jsonify({"ok": True, "message": "PAT removed from this server session."})
+    if (request.get_json(silent=True) or {}).get("deleteStoredPat") is True:
+        delete_os_credential()
+        return jsonify({"ok": True, "message": "Session PAT and saved Windows credential were removed."})
+    return jsonify({"ok": True, "message": "PAT removed from this app session."})
+
+
+@app.get("/api/credential-status")
+def credential_status():
+    return jsonify({"stored": load_os_credential() is not None})
 
 
 @app.post("/api/preview")
@@ -509,7 +757,7 @@ def preview():
                     "type": details.get("type", "Unknown"),
                     "destination": destination.project,
                     "destinationId": destination_id,
-                    "action": "Update" if destination_id is not None else "Create",
+                    "action": "Will update" if destination_id is not None else "Will create",
                 })
     total_pairs = len(selected_ids) * len(destination_refs)
     create_count = total_pairs - mapped_pairs
@@ -575,6 +823,8 @@ def sync():
     totals = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
     for destination in destination_refs:
         destination_totals = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+        destination_warnings: list[str] = []
+        comments_copied = 0
         for item in source_items:
             source_id = int(item["id"])
             source_fields = item.get("fields", {})
@@ -592,7 +842,8 @@ def sync():
             action = "Update" if destination_id is not None else "Create"
             try:
                 patch = work_item_patch(
-                    item, selected_fields, include_hyperlinks=destination_id is None
+                    item, selected_fields, include_hyperlinks=destination_id is None,
+                    require_title=destination_id is None,
                 )
                 if destination_id is None:
                     encoded_type = urllib.parse.quote(str(item_type), safe="")
@@ -616,10 +867,17 @@ def sync():
                     destination_totals["updated"] += 1
                     totals["updated"] += 1
                 save_mapping(source, destination, item, destination_id)
+                if "Discussions" in selected_fields:
+                    comment_count, comment_errors = synchronize_comments(
+                        source, destination, pat, item, destination_id
+                    )
+                    comments_copied += comment_count
+                    destination_warnings.extend(comment_errors)
                 results.append({
                     "sourceId": source_id, "title": title, "type": item_type,
                     "destination": destination.project, "destinationId": destination_id,
-                    "action": action, "status": "Success", "error": "",
+                    "action": "Updated" if action == "Update" else "Created",
+                    "status": "Success", "error": "",
                 })
             except (ValueError, PermissionError, ConnectionError, RuntimeError, KeyError) as exc:
                 destination_totals["failed"] += 1
@@ -629,9 +887,21 @@ def sync():
                     "destination": destination.project, "destinationId": destination_id,
                     "action": action, "status": "Failed", "error": str(exc),
                 })
+        links_copied = 0
+        if body.get("preserveRelationships") is True:
+            links_copied, link_errors = synchronize_links(
+                source, destination, pat, source_items
+            )
+            destination_warnings.extend(link_errors)
         entries.append({
             "destination": destination.project,
-            "status": "Completed" if destination_totals["failed"] == 0 else "Completed with errors",
+            "status": (
+                "Completed" if destination_totals["failed"] == 0 and not destination_warnings
+                else "Completed with warnings or errors"
+            ),
+            "links": links_copied,
+            "comments": comments_copied,
+            "warnings": destination_warnings,
             **destination_totals,
         })
 

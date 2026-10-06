@@ -1,6 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-
 a = Analysis(
     ['desktop.py'],
     pathex=[],
@@ -22,7 +21,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='FA-Sync-Console',
+    name='Azure-WorkSync',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

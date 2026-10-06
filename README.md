@@ -1,4 +1,4 @@
-# FA Sync Console
+# Azure WorkSync
 
 A Python/Flask desktop app for one-way Azure DevOps work-item synchronization from one source project to multiple destination projects.
 
@@ -11,6 +11,8 @@ A Python/Flask desktop app for one-way Azure DevOps work-item synchronization fr
 - Safe preview followed by an explicit live-write switch and confirmation
 - Creates selected items in every destination and updates them on later runs
 - Local source-to-destination ID mappings in `%LOCALAPPDATA%\FA-Sync-Console\fa-sync.db`
+- Optional PAT storage in Windows Credential Manager; the PAT is never written to app files
+- Automatic `FA-Synced` destination tag, mapped work-item links, and optional discussions
 - Per-item destination IDs and error reports
 
 Destination workflow state is never created from or updated to match the source. The destination project must support the source work-item type; otherwise that item is reported as failed without stopping the remaining items.
@@ -28,11 +30,11 @@ Open `http://127.0.0.1:5000`.
 
 ## Windows executable
 
-The packaged `FA-Sync-Console.exe` opens as a desktop application. It does not show a console, browser address, or local IP. Closing the desktop window stops the application and clears the session PAT.
+The packaged `Azure-WorkSync.exe` opens as a desktop application. It does not show a console, browser address, or local IP. Closing the desktop window stops the application and clears the session PAT unless the user explicitly saved it in Windows Credential Manager.
 
 ## PAT handling
 
-Use a PAT with **Work Items: Read & write** access to the source and every destination project. The PAT is posted to the Python backend for validation and retained only in process memory under a random session identifier. It is never written to project files, logs, cookies, or browser storage. Restarting the app clears all retained PATs.
+Use a PAT with **Work Items: Read & write** access to the source and every destination project. The PAT is posted to the Python backend for validation and retained only in process memory under a random session identifier. If **Remember securely** is selected, it is stored in Windows Credential Manager. It is never written to project files, logs, cookies, browser storage, or environment files.
 
 ## Live synchronization safety
 

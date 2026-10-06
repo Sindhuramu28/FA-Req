@@ -9,6 +9,8 @@ const state = {
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[character]));
+const actionClass = action => String(action).toLowerCase().includes("update") ? "update" : "create";
 
 function showToast(message, error = false) {
   const toast = $("#toast");
@@ -22,7 +24,7 @@ function renderDestinations() {
   $("#destinationList").innerHTML = state.destinations.map((url, index) => `
     <div class="destination-row">
       <span class="destination-number">${index + 1}</span>
-      <input type="url" value="${url}" aria-label="Destination project ${index + 1}" data-destination="${index}">
+      <input type="url" value="${escapeHtml(url)}" aria-label="Destination project ${index + 1}" data-destination="${index}">
       <button class="remove-destination" type="button" data-remove="${index}" aria-label="Remove destination ${index + 1}">×</button>
     </div>`).join("");
   $("#destinationMetric").textContent = state.destinations.length;
@@ -33,11 +35,11 @@ function renderItems(filter = "") {
   const rows = state.items.filter(item => `${item.id} ${item.type} ${item.title}`.toLowerCase().includes(term));
   $("#itemRows").innerHTML = rows.map(item => `
     <tr>
-      <td><input class="table-check" type="checkbox" data-item="${item.id}" ${item.selected ? "checked" : ""} aria-label="Select ${item.title}"></td>
+      <td><input class="table-check" type="checkbox" data-item="${item.id}" ${item.selected ? "checked" : ""} aria-label="Select ${escapeHtml(item.title)}"></td>
       <td><strong>${item.id}</strong></td>
-      <td><span class="type-chip ${item.type.toLowerCase().replace(" ", "-")}">${item.type}</span></td>
-      <td>${item.title}</td>
-      <td class="state-muted">${item.state}</td>
+      <td><span class="type-chip ${item.type.toLowerCase().replace(" ", "-")}">${escapeHtml(item.type)}</span></td>
+      <td>${escapeHtml(item.title)}</td>
+      <td class="state-muted">${escapeHtml(item.state)}</td>
       <td>${item.children}</td>
     </tr>`).join("");
   updateMetrics();
@@ -45,7 +47,7 @@ function renderItems(filter = "") {
 
 function updateMetrics() {
   $("#itemMetric").textContent = state.items.filter(item => item.selected).length;
-  try { $("#sourceMetric").textContent = new URL($("#source").value).pathname.split("/").filter(Boolean)[0] || "Source"; } catch { $("#sourceMetric").textContent = "Source"; }
+  try { const parts = new URL($("#source").value).pathname.split("/").filter(Boolean); $("#sourceMetric").textContent = parts.at(-1) || "Source"; } catch { $("#sourceMetric").textContent = "Source"; }
 }
 
 function currentConfig() {
@@ -77,7 +79,7 @@ function showPreview(data) {
     ["Creates", s.creates, "Expected"], ["Updates", s.updates, "Expected"], ["Hierarchy links", s.relationships, "Not enabled"]
   ].map(([label,value,note]) => `<div class="result-stat"><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`).join("");
   $("#changeRows").innerHTML = (data.changes || []).map(change => `
-    <tr><td>${change.sourceId}</td><td>${change.title}</td><td>${change.type}</td><td>${change.destination}</td><td>${change.destinationId || "—"}</td><td><span class="action-chip ${change.action.toLowerCase()}">${change.action}</span></td><td>${change.status || "Planned"}${change.error ? `<br><small class="error-text">${change.error}</small>` : ""}</td></tr>`).join("");
+    <tr><td>${change.sourceId}</td><td>${escapeHtml(change.title)}</td><td>${escapeHtml(change.type)}</td><td>${escapeHtml(change.destination)}</td><td>${change.destinationId || "—"}</td><td><span class="action-chip ${actionClass(change.action)}">${escapeHtml(change.action)}</span></td><td>${escapeHtml(change.status || "Planned")}${change.error ? `<br><small class="error-text">${escapeHtml(change.error)}</small>` : ""}</td></tr>`).join("");
   $("#changeDetails").classList.toggle("hidden", !(data.changes || []).length);
   $("#results").classList.remove("hidden");
   $("#results").scrollIntoView({behavior: "smooth", block: "center"});
@@ -86,6 +88,13 @@ function showPreview(data) {
 async function init() {
   renderDestinations();
   renderItems();
+  const response = await fetch("/api/credential-status");
+  const credential = await response.json();
+  if (credential.stored) {
+    $("#rememberPat").checked = true;
+    $("#credentialStatus").textContent = "Saved PAT available in Windows Credential Manager";
+    $("#pat").placeholder = "Saved credential available";
+  }
 }
 
 $("#destinationList").addEventListener("input", event => {
@@ -119,7 +128,7 @@ $("#togglePat").addEventListener("click", () => {
 $("#validateButton").addEventListener("click", async () => {
   const button = $("#validateButton"); button.disabled = true; button.textContent = "Validating…";
   try {
-    const data = await post("/api/connect", {pat: $("#pat").value, source: $("#source").value, destinations: state.destinations});
+    const data = await post("/api/connect", {pat: $("#pat").value, source: $("#source").value, destinations: state.destinations, rememberPat: $("#rememberPat").checked, useStoredPat: $("#rememberPat").checked});
     $("#pat").value = "";
     $("#source").value = data.projects[0].url;
     state.destinations = data.projects.slice(1).map(project => project.url);
@@ -127,7 +136,7 @@ $("#validateButton").addEventListener("click", async () => {
     $("#connectionStatus").textContent = `${data.projects.length} projects connected`;
     $("#connectionStatus").classList.add("ready"); showToast(data.message);
   } catch (error) { showToast(error.message, true); }
-  finally { button.disabled = false; button.textContent = "Validate connections"; }
+  finally { button.disabled = false; button.textContent = "Validate"; }
 });
 $("#loadItems").addEventListener("click", async () => {
   const button = $("#loadItems"); button.disabled = true; button.textContent = "Loading…";
@@ -137,10 +146,16 @@ $("#loadItems").addEventListener("click", async () => {
     $("#scopeStatus").textContent = `${data.items.length} live items`;
     $("#scopeStatus").classList.add("ready"); showToast(data.message);
   } catch (error) { showToast(error.message, true); }
-  finally { button.disabled = false; button.textContent = "Load live items"; }
+  finally { button.disabled = false; button.textContent = "Load items"; }
 });
 $("#disconnectButton").addEventListener("click", async () => {
-  const data = await post("/api/disconnect"); $("#pat").value = "";
+  const data = await post("/api/disconnect", {}); $("#pat").value = "";
+  $("#connectionStatus").textContent = "Not validated"; $("#connectionStatus").classList.remove("ready"); showToast(data.message);
+});
+$("#deleteStoredPat").addEventListener("click", async () => {
+  const data = await post("/api/disconnect", {deleteStoredPat: true});
+  $("#rememberPat").checked = false; $("#pat").value = ""; $("#pat").placeholder = "Paste PAT or use saved credential";
+  $("#credentialStatus").textContent = "Uses Windows Credential Manager, never app files";
   $("#connectionStatus").textContent = "Not validated"; $("#connectionStatus").classList.remove("ready"); showToast(data.message);
 });
 $("#previewButton").addEventListener("click", async () => {
@@ -149,9 +164,6 @@ $("#previewButton").addEventListener("click", async () => {
 $("#liveWrites").addEventListener("change", event => {
   const enabled = event.target.checked;
   $("#runButton").disabled = !enabled;
-  $("#modePill").innerHTML = `<i></i> ${enabled ? "Live writes enabled" : "Preview mode"}`;
-  $("#sidebarMode").textContent = enabled ? "Live mode" : "Preview mode";
-  $("#sidebarModeNote").textContent = enabled ? "Azure writes enabled" : "Writes require confirmation";
 });
 $("#runButton").addEventListener("click", async () => {
   if (!$("#liveWrites").checked) return showToast("Enable live writes before synchronizing.", true);
@@ -167,7 +179,7 @@ $("#runButton").addEventListener("click", async () => {
       ["Failed", totals.failed, "Items"], ["Duration", data.duration, "Total"]
     ].map(([label,value,note]) => `<div class="result-stat"><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`).join("");
     $("#changeRows").innerHTML = (data.results || []).map(change => `
-      <tr><td>${change.sourceId}</td><td>${change.title}</td><td>${change.type}</td><td>${change.destination}</td><td>${change.destinationId || "—"}</td><td><span class="action-chip ${change.action.toLowerCase()}">${change.action}</span></td><td>${change.status}${change.error ? `<br><small class="error-text">${change.error}</small>` : ""}</td></tr>`).join("");
+      <tr><td>${change.sourceId}</td><td>${escapeHtml(change.title)}</td><td>${escapeHtml(change.type)}</td><td>${escapeHtml(change.destination)}</td><td>${change.destinationId || "—"}</td><td><span class="action-chip ${actionClass(change.action)}">${escapeHtml(change.action)}</span></td><td>${escapeHtml(change.status)}${change.error ? `<br><small class="error-text">${escapeHtml(change.error)}</small>` : ""}</td></tr>`).join("");
     $("#changeDetails").classList.remove("hidden");
     $("#results").classList.remove("hidden"); $("#results").scrollIntoView({behavior:"smooth",block:"center"});
   } catch (error) { showToast(error.message, true); }
@@ -181,4 +193,4 @@ $$('.nav-item').forEach(button => button.addEventListener("click", () => {
 $("#helpButton").addEventListener("click", () => $("#helpDialog").showModal());
 $(".dialog-close").addEventListener("click", () => $("#helpDialog").close());
 
-init().catch(() => showToast("The demo dataset could not be loaded.", true));
+init().catch(() => showToast("The app could not finish loading.", true));

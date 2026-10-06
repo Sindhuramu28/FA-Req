@@ -39,7 +39,7 @@ class AppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["changes"][0]["sourceId"], 12)
         self.assertEqual(response.json["changes"][0]["title"], "Test task")
-        self.assertEqual(response.json["changes"][0]["action"], "Create")
+        self.assertEqual(response.json["changes"][0]["action"], "Will create")
 
     def test_demo_items(self):
         response = self.client.get("/api/demo-items")
@@ -61,6 +61,34 @@ class AppTests(unittest.TestCase):
         self.assertIn("/fields/System.Description", paths)
         self.assertIn("/fields/System.Tags", paths)
         self.assertNotIn("/fields/System.State", paths)
+        tag_operation = next(op for op in patch_document if op["path"] == "/fields/System.Tags")
+        self.assertIn("FA-Synced", tag_operation["value"])
+
+    def test_custom_impact_assessment_field_is_copied(self):
+        patch_document = work_item_patch({
+            "fields": {
+                "System.Title": "Feature",
+                "Custom.ImpactAssessment": "High impact",
+            },
+            "relations": [],
+        }, ["Impact assessment"])
+        operation = next(
+            op for op in patch_document
+            if op["path"] == "/fields/Custom.ImpactAssessment"
+        )
+        self.assertEqual(operation["value"], "High impact")
+
+    def test_title_can_be_excluded_from_updates(self):
+        patch_document = work_item_patch({
+            "fields": {"System.Title": "Do not copy"}, "relations": []
+        }, [], require_title=False)
+        self.assertNotIn("/fields/System.Title", [op["path"] for op in patch_document])
+
+    @patch("app.load_os_credential", return_value="saved-pat")
+    def test_credential_status_reports_saved_pat(self, load_credential):
+        response = self.client.get("/api/credential-status")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["stored"])
 
     def test_live_sync_requires_explicit_confirmation(self):
         response = self.client.post("/api/sync", json={
