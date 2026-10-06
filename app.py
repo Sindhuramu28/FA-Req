@@ -220,10 +220,10 @@ def wiql_escape(value: str) -> str:
 
 
 def load_source_work_items(ref: ProjectRef, pat: str, marker: str) -> list[dict[str, Any]]:
-    # Explicitly scope WIQL to the project. Some Azure DevOps organizations
-    # return an empty result for a project endpoint query without a WHERE
-    # clause, while @project works consistently across inherited processes.
-    conditions: list[str] = ["[System.TeamProject] = @project"]
+    # Query at organization scope with an explicit project name. This avoids
+    # relying on Azure to infer @project from a copied Boards/browser URL.
+    project_name = wiql_escape(ref.project)
+    conditions: list[str] = [f"[System.TeamProject] = '{project_name}'"]
     if marker == "tag":
         conditions.append("[System.Tags] CONTAINS 'FA'")
     query = (
@@ -237,6 +237,7 @@ def load_source_work_items(ref: ProjectRef, pat: str, marker: str) -> list[dict[
         "_apis/wit/wiql?$top=1000&api-version=7.1",
         method="POST",
         payload={"query": query},
+        project_scoped=False,
     )
     ids = [int(item["id"]) for item in result.get("workItems", [])]
     records: list[dict[str, Any]] = []

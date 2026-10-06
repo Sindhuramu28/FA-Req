@@ -115,6 +115,9 @@ $("#validateButton").addEventListener("click", async () => {
   try {
     const data = await post("/api/connect", {pat: $("#pat").value, source: $("#source").value, destinations: state.destinations});
     $("#pat").value = "";
+    $("#source").value = data.projects[0].url;
+    state.destinations = data.projects.slice(1).map(project => project.url);
+    renderDestinations(); updateMetrics();
     $("#connectionStatus").textContent = `${data.projects.length} projects connected`;
     $("#connectionStatus").classList.add("ready"); showToast(data.message);
   } catch (error) { showToast(error.message, true); }
