@@ -125,15 +125,6 @@ def delete_os_credential() -> None:
         ctypes.windll.advapi32.CredDeleteW(CREDENTIAL_TARGET, 1, 0)
         ctypes.windll.advapi32.CredDeleteW(LEGACY_CREDENTIAL_TARGET, 1, 0)
 
-MOCK_ITEMS = [
-    {"id": 1042, "type": "Epic", "title": "Unified customer onboarding", "state": "Active", "children": 2, "selected": True},
-    {"id": 1051, "type": "Feature", "title": "Identity verification", "state": "Active", "children": 2, "selected": True},
-    {"id": 1058, "type": "Requirement", "title": "Verify identity documents", "state": "New", "children": 1, "selected": True},
-    {"id": 1062, "type": "Test Case", "title": "Validate passport verification flow", "state": "Design", "children": 0, "selected": True},
-    {"id": 1068, "type": "Feature", "title": "Customer notification preferences", "state": "Active", "children": 1, "selected": True},
-    {"id": 1074, "type": "Requirement", "title": "Opt in to status notifications", "state": "Approved", "children": 0, "selected": True},
-]
-
 URL_RE = re.compile(r"^https://dev\.azure\.com/(?P<org>[^/]+)/(?P<project>[^/?#]+)", re.I)
 
 
@@ -608,11 +599,6 @@ def secure_headers(response):
 @app.get("/")
 def index():
     return render_template("index.html")
-
-
-@app.get("/api/demo-items")
-def demo_items():
-    return jsonify({"items": MOCK_ITEMS, "mode": "demo"})
 
 
 @app.post("/api/work-items")

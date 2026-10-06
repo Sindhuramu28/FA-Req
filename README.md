@@ -38,4 +38,4 @@ Use a PAT with **Work Items: Read & write** access to the source and every desti
 
 ## Live synchronization safety
 
-Preview is always read-only. A live run requires enabling **Enable live writes** and accepting a separate confirmation. Title is always synchronized. Description, tags, and hyperlinks follow the selected field controls. Hyperlinks are copied during creation; later updates do not duplicate them. State is never included in Azure create or update requests.
+Preview is always read-only. A live run requires enabling **Activate** and accepting a separate confirmation. Selected fields are synchronized; Title remains mandatory when a new destination item is created. The `FA-Synced` tracking tag is always retained. Hyperlinks are copied during creation, and mapped Azure work-item links can be recreated. State is never included in Azure create or update requests.

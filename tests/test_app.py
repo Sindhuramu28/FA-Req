@@ -41,11 +41,6 @@ class AppTests(unittest.TestCase):
         self.assertEqual(response.json["changes"][0]["title"], "Test task")
         self.assertEqual(response.json["changes"][0]["action"], "Will create")
 
-    def test_demo_items(self):
-        response = self.client.get("/api/demo-items")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.json["items"]), 6)
-
     def test_work_item_patch_never_copies_state(self):
         patch_document = work_item_patch({
             "fields": {
