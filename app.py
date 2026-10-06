@@ -749,7 +749,7 @@ def preview():
                     "type": details.get("type", "Unknown"),
                     "destination": destination.project,
                     "destinationId": destination_id,
-                    "action": "Updated" if destination_id is not None else "To be created",
+                    "action": "Updated" if destination_id is not None else "To create",
                 })
     total_pairs = len(selected_ids) * len(destination_refs)
     create_count = total_pairs - mapped_pairs

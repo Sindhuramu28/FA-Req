@@ -39,7 +39,7 @@ class AppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["changes"][0]["sourceId"], 12)
         self.assertEqual(response.json["changes"][0]["title"], "Test task")
-        self.assertEqual(response.json["changes"][0]["action"], "To be created")
+        self.assertEqual(response.json["changes"][0]["action"], "To create")
 
     def test_work_item_patch_never_copies_state(self):
         patch_document = work_item_patch({
