@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from app import app, parse_project_url
+from app import app, load_source_work_items, parse_project_url
 
 
 class AppTests(unittest.TestCase):
@@ -39,6 +40,27 @@ class AppTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 400)
         self.assertIn("Validate", response.json["message"])
+
+    @patch("app.azure_request")
+    def test_manual_loading_does_not_restrict_work_item_types(self, azure_request):
+        azure_request.side_effect = [
+            {"workItems": [{"id": 12}]},
+            {"value": [{
+                "id": 12,
+                "rev": 3,
+                "fields": {
+                    "System.WorkItemType": "Task",
+                    "System.Title": "Existing task",
+                    "System.State": "Active",
+                },
+                "relations": [],
+            }]},
+        ]
+        ref = parse_project_url("https://dev.azure.com/example/source")
+        items = load_source_work_items(ref, "test-pat", "manual")
+        query = azure_request.call_args_list[0].kwargs["payload"]["query"]
+        self.assertNotIn("System.WorkItemType", query)
+        self.assertEqual(items[0]["type"], "Task")
 
 
 if __name__ == "__main__":

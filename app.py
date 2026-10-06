@@ -220,15 +220,11 @@ def wiql_escape(value: str) -> str:
 
 
 def load_source_work_items(ref: ProjectRef, pat: str, marker: str) -> list[dict[str, Any]]:
-    supported_types = "'Epic','Feature','Requirement','Test Case'"
-    conditions = [f"[System.WorkItemType] IN ({supported_types})"]
+    conditions: list[str] = []
     if marker == "tag":
         conditions.append("[System.Tags] CONTAINS 'FA'")
-    query = (
-        "SELECT [System.Id] FROM WorkItems WHERE "
-        + " AND ".join(conditions)
-        + " ORDER BY [System.Id]"
-    )
+    where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    query = f"SELECT [System.Id] FROM WorkItems{where_clause} ORDER BY [System.Id]"
     result = azure_request(
         ref,
         pat,
