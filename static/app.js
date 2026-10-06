@@ -70,6 +70,16 @@ async function post(url, payload = {}) {
   return data;
 }
 
+async function loadSourceItems() {
+  $("#scopeStatus").textContent = "Loading…";
+  const data = await post("/api/work-items", {source: $("#source").value, marker: $("#faMarker").value});
+  state.items = data.items;
+  renderItems();
+  $("#scopeStatus").textContent = `${data.items.length} items`;
+  $("#scopeStatus").classList.add("ready");
+  return data;
+}
+
 function showPreview(data) {
   const s = data.summary;
   $("#resultTitle").textContent = "Preview complete";
@@ -92,7 +102,6 @@ async function init() {
   const credential = await response.json();
   if (credential.stored) {
     $("#rememberPat").checked = true;
-    $("#credentialStatus").textContent = "Saved PAT available in Windows Credential Manager";
     $("#pat").placeholder = "Saved credential available";
   }
 }
@@ -115,6 +124,10 @@ $("#itemRows").addEventListener("change", event => {
   updateMetrics();
 });
 $("#searchItems").addEventListener("input", event => renderItems(event.target.value));
+$("#faMarker").addEventListener("change", async () => {
+  try { const data = await loadSourceItems(); showToast(data.message); }
+  catch (error) { showToast(error.message, true); }
+});
 $("#selectAll").addEventListener("click", () => {
   const allSelected = state.items.every(item => item.selected);
   state.items.forEach(item => item.selected = !allSelected);
@@ -134,19 +147,11 @@ $("#validateButton").addEventListener("click", async () => {
     state.destinations = data.projects.slice(1).map(project => project.url);
     renderDestinations(); updateMetrics();
     $("#connectionStatus").textContent = `${data.projects.length} projects connected`;
-    $("#connectionStatus").classList.add("ready"); showToast(data.message);
+    $("#connectionStatus").classList.add("ready");
+    const items = await loadSourceItems();
+    showToast(`${data.message} ${items.message}`);
   } catch (error) { showToast(error.message, true); }
   finally { button.disabled = false; button.textContent = "Validate"; }
-});
-$("#loadItems").addEventListener("click", async () => {
-  const button = $("#loadItems"); button.disabled = true; button.textContent = "Loading…";
-  try {
-    const data = await post("/api/work-items", {source: $("#source").value, marker: $("#faMarker").value});
-    state.items = data.items; renderItems();
-    $("#scopeStatus").textContent = `${data.items.length} live items`;
-    $("#scopeStatus").classList.add("ready"); showToast(data.message);
-  } catch (error) { showToast(error.message, true); }
-  finally { button.disabled = false; button.textContent = "Load items"; }
 });
 $("#disconnectButton").addEventListener("click", async () => {
   const data = await post("/api/disconnect", {}); $("#pat").value = "";
@@ -155,7 +160,6 @@ $("#disconnectButton").addEventListener("click", async () => {
 $("#deleteStoredPat").addEventListener("click", async () => {
   const data = await post("/api/disconnect", {deleteStoredPat: true});
   $("#rememberPat").checked = false; $("#pat").value = ""; $("#pat").placeholder = "Paste PAT or use saved credential";
-  $("#credentialStatus").textContent = "Uses Windows Credential Manager, never app files";
   $("#connectionStatus").textContent = "Not validated"; $("#connectionStatus").classList.remove("ready"); showToast(data.message);
 });
 $("#previewButton").addEventListener("click", async () => {
@@ -183,7 +187,7 @@ $("#runButton").addEventListener("click", async () => {
     $("#changeDetails").classList.remove("hidden");
     $("#results").classList.remove("hidden"); $("#results").scrollIntoView({behavior:"smooth",block:"center"});
   } catch (error) { showToast(error.message, true); }
-  finally { button.disabled = !$("#liveWrites").checked; button.innerHTML = "Synchronize now <span>→</span>"; }
+  finally { button.disabled = !$("#liveWrites").checked; button.textContent = "Synchronize"; }
 });
 $("#closeResults").addEventListener("click", () => $("#results").classList.add("hidden"));
 $$('.nav-item').forEach(button => button.addEventListener("click", () => {
