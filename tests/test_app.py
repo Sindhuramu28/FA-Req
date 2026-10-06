@@ -28,6 +28,19 @@ class AppTests(unittest.TestCase):
         response = self.client.post("/api/preview", json={"selectedIds": [], "destinations": ["x"]})
         self.assertEqual(response.status_code, 400)
 
+    def test_preview_returns_individual_change_rows(self):
+        response = self.client.post("/api/preview", json={
+            "source": "https://dev.azure.com/example/source",
+            "selectedIds": [12],
+            "selectedItems": [{"id": 12, "title": "Test task", "type": "Task"}],
+            "destinations": ["https://dev.azure.com/example/destination"],
+            "fields": ["Title"],
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["changes"][0]["sourceId"], 12)
+        self.assertEqual(response.json["changes"][0]["title"], "Test task")
+        self.assertEqual(response.json["changes"][0]["action"], "Create")
+
     def test_demo_items(self):
         response = self.client.get("/api/demo-items")
         self.assertEqual(response.status_code, 200)

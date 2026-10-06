@@ -362,6 +362,7 @@ def disconnect():
 def preview():
     body = request.get_json(silent=True) or {}
     selected_ids = body.get("selectedIds", [])
+    selected_items = body.get("selectedItems", [])
     destinations = body.get("destinations", [])
     fields = body.get("fields", [])
     if not selected_ids:
@@ -374,7 +375,15 @@ def preview():
         destination_refs = [parse_project_url(str(url)) for url in destinations]
     except ValueError as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
+    item_details = {
+        int(item.get("id")): {
+            "title": str(item.get("title", "Untitled")),
+            "type": str(item.get("type", "Unknown")),
+        }
+        for item in selected_items if item.get("id") is not None
+    }
     mapped_pairs = 0
+    changes: list[dict[str, Any]] = []
     with database() as db:
         for destination in destination_refs:
             placeholders = ",".join("?" for _ in selected_ids)
@@ -387,6 +396,27 @@ def preview():
                  destination.project, *selected_ids],
             ).fetchone()
             mapped_pairs += int(row["count"])
+            mapping_rows = db.execute(
+                f"""SELECT source_id, destination_id FROM work_item_mappings
+                    WHERE source_organization=? AND source_project=?
+                    AND destination_organization=? AND destination_project=?
+                    AND source_id IN ({placeholders})""",
+                [source.organization, source.project, destination.organization,
+                 destination.project, *selected_ids],
+            ).fetchall()
+            mapped = {int(item["source_id"]): int(item["destination_id"]) for item in mapping_rows}
+            for source_id in selected_ids:
+                numeric_id = int(source_id)
+                details = item_details.get(numeric_id, {})
+                destination_id = mapped.get(numeric_id)
+                changes.append({
+                    "sourceId": numeric_id,
+                    "title": details.get("title", "Untitled"),
+                    "type": details.get("type", "Unknown"),
+                    "destination": destination.project,
+                    "destinationId": destination_id,
+                    "action": "Update" if destination_id is not None else "Create",
+                })
     total_pairs = len(selected_ids) * len(destination_refs)
     create_count = total_pairs - mapped_pairs
     update_count = mapped_pairs
@@ -400,6 +430,7 @@ def preview():
             "relationships": max(0, len(selected_ids) - 1) * len(destinations),
             "fields": len(fields),
         },
+        "changes": changes,
         "message": "Live mapping preview completed. No Azure DevOps data was changed.",
     })
 

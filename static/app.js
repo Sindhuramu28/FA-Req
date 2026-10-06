@@ -49,10 +49,12 @@ function updateMetrics() {
 }
 
 function currentConfig() {
+  const selectedItems = state.items.filter(item => item.selected);
   return {
     source: $("#source").value.trim(),
     destinations: state.destinations.filter(Boolean),
-    selectedIds: state.items.filter(item => item.selected).map(item => item.id),
+    selectedIds: selectedItems.map(item => item.id),
+    selectedItems: selectedItems.map(item => ({id: item.id, title: item.title, type: item.type, rev: item.rev})),
     fields: $$("#fieldList input:checked").map(input => input.value),
     preserveRelationships: $("#relations").checked
   };
@@ -73,6 +75,9 @@ function showPreview(data) {
     ["Work items", s.items, "Selected"], ["Destinations", s.destinations, "Configured"],
     ["Creates", s.creates, "Expected"], ["Updates", s.updates, "Expected"], ["Relationships", s.relationships, "Rebuilt"]
   ].map(([label,value,note]) => `<div class="result-stat"><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`).join("");
+  $("#changeRows").innerHTML = (data.changes || []).map(change => `
+    <tr><td>${change.sourceId}</td><td>${change.title}</td><td>${change.type}</td><td>${change.destination}</td><td>${change.destinationId || "—"}</td><td><span class="action-chip ${change.action.toLowerCase()}">${change.action}</span></td></tr>`).join("");
+  $("#changeDetails").classList.toggle("hidden", !(data.changes || []).length);
   $("#results").classList.remove("hidden");
   $("#results").scrollIntoView({behavior: "smooth", block: "center"});
 }
@@ -150,6 +155,7 @@ $("#runButton").addEventListener("click", async () => {
       ["Destinations", data.entries.length, "Processed"], ["Created", totals.created, "Simulated"], ["Updated", totals.updated, "Simulated"],
       ["Failed", totals.failed, "Items"], ["Duration", data.duration, "Total"]
     ].map(([label,value,note]) => `<div class="result-stat"><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`).join("");
+    $("#changeDetails").classList.add("hidden");
     $("#results").classList.remove("hidden"); $("#results").scrollIntoView({behavior:"smooth",block:"center"});
   } catch (error) { showToast(error.message, true); }
   finally { button.disabled = false; button.innerHTML = "Run dry sync <span>→</span>"; }
