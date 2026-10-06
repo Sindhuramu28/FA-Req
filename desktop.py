@@ -1,4 +1,4 @@
-"""Native desktop launcher for Azure WorkSync."""
+"""Native desktop launcher for SyncWorkTrack."""
 
 import webview
 
@@ -7,7 +7,7 @@ from app import app
 
 def main() -> None:
     webview.create_window(
-        "Azure WorkSync",
+        "SyncWorkTrack",
         app,
         width=1440,
         height=920,

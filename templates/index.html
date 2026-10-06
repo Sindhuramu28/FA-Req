@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Synchronize Azure DevOps work items from one source to multiple destinations.">
-  <title>Azure WorkSync</title>
+  <title>SyncWorkTrack</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body><main>
-  <header class="topbar"><div class="brand-block"><span class="brand-mark">AW</span><div><p class="eyebrow">Azure DevOps synchronization</p><h1>Azure WorkSync</h1></div></div><div class="header-actions"><button class="button ghost" disabled>Instruction manual</button><a class="button ghost" href="https://dev.azure.com/PG-PSDC/Control%20and%20Protection%20System%20Base/_workitems/create/Issue?templateId=ef7abe6e-fcd8-42a5-9694-4abb6abe16a1&amp;ownerId=c3089ada-f0ea-4685-a8a1-9cf18b151f2e" target="_blank" rel="noopener noreferrer">Report bug</a><a class="button ghost" href="https://dev.azure.com/PG-PSDC/Control%20and%20Protection%20System%20Base/_workitems/create/Issue?templateId=ef7abe6e-fcd8-42a5-9694-4abb6abe16a1&amp;ownerId=c3089ada-f0ea-4685-a8a1-9cf18b151f2e" target="_blank" rel="noopener noreferrer">Request feature</a></div></header>
+  <header class="topbar"><div class="brand-block"><span class="brand-mark">SWT</span><div><p class="eyebrow">Azure DevOps synchronization</p><h1>SyncWorkTrack</h1></div></div><div class="header-actions"><button class="button ghost" disabled>Instruction manual</button><a class="button ghost" href="https://dev.azure.com/PG-PSDC/Control%20and%20Protection%20System%20Base/_workitems/create/Issue?templateId=ef7abe6e-fcd8-42a5-9694-4abb6abe16a1&amp;ownerId=c3089ada-f0ea-4685-a8a1-9cf18b151f2e" target="_blank" rel="noopener noreferrer">Report bug</a><a class="button ghost" href="https://dev.azure.com/PG-PSDC/Control%20and%20Protection%20System%20Base/_workitems/create/Issue?templateId=ef7abe6e-fcd8-42a5-9694-4abb6abe16a1&amp;ownerId=c3089ada-f0ea-4685-a8a1-9cf18b151f2e" target="_blank" rel="noopener noreferrer">Request feature</a></div></header>
   <section class="metric-row"><article><span>Source</span><strong id="sourceMetric">Not configured</strong></article><article><span>Destinations</span><strong id="destinationMetric">1</strong></article><article><span>Selected items</span><strong id="itemMetric">0</strong></article><article><span>Direction</span><strong>Source → destinations</strong></article></section>
 
   <section class="panel" id="connection">
@@ -39,5 +39,5 @@
   </div>
 
   <section class="result-panel hidden" id="results" aria-live="polite"><div class="result-head"><div><span class="success-mark">✓</span><div><h2 id="resultTitle">Preview complete</h2><p id="resultMessage"></p></div></div><button class="icon-button" id="closeResults">Close</button></div><div class="result-grid" id="resultGrid"></div><div class="change-details hidden" id="changeDetails"><h3>Work-item changes</h3><div class="table-wrap result-table-wrap"><table><thead><tr><th>Source ID</th><th>Title</th><th>Type</th><th>Destination</th><th>Destination ID</th><th>Action</th><th>Status</th></tr></thead><tbody id="changeRows"></tbody></table></div></div></section>
-  <footer><span>Azure WorkSync</span><span>PATs are session-only unless saved in Windows Credential Manager</span></footer>
+  <footer><span>SyncWorkTrack</span><span>PATs are session-only unless saved in Windows Credential Manager</span></footer>
 </main><div class="toast hidden" id="toast" role="status"></div><script src="{{ url_for('static', filename='app.js') }}"></script></body></html>

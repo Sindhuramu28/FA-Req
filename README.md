@@ -1,4 +1,4 @@
-# Azure WorkSync
+# SyncWorkTrack
 
 A Python/Flask desktop app for one-way Azure DevOps work-item synchronization from one source project to multiple destination projects.
 
@@ -30,7 +30,7 @@ Open `http://127.0.0.1:5000`.
 
 ## Windows executable
 
-The packaged `Azure-WorkSync.exe` opens as a desktop application. It does not show a console, browser address, or local IP. Closing the desktop window stops the application and clears the session PAT unless the user explicitly saved it in Windows Credential Manager.
+The packaged `SyncWorkTrack.exe` opens as a desktop application. It does not show a console, browser address, or local IP. Closing the desktop window stops the application and clears the session PAT unless the user explicitly saved it in Windows Credential Manager.
 
 ## PAT handling
 

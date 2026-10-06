@@ -69,7 +69,8 @@ class PatVault:
 
 
 PAT_VAULT = PatVault()
-CREDENTIAL_TARGET = "Azure WorkSync PAT"
+CREDENTIAL_TARGET = "SyncWorkTrack PAT"
+LEGACY_CREDENTIAL_TARGET = "Azure WorkSync PAT"
 DESTINATION_TAG = "FA-Synced"
 
 
@@ -101,11 +102,11 @@ def save_os_credential(pat: str) -> None:
         raise ctypes.WinError()
 
 
-def load_os_credential() -> str | None:
+def read_windows_credential(target: str) -> str | None:
     if sys.platform != "win32":
         return None
     pointer = ctypes.POINTER(CREDENTIALW)()
-    if not ctypes.windll.advapi32.CredReadW(CREDENTIAL_TARGET, 1, 0, ctypes.byref(pointer)):
+    if not ctypes.windll.advapi32.CredReadW(target, 1, 0, ctypes.byref(pointer)):
         return None
     try:
         credential = pointer.contents
@@ -115,9 +116,14 @@ def load_os_credential() -> str | None:
         ctypes.windll.advapi32.CredFree(pointer)
 
 
+def load_os_credential() -> str | None:
+    return read_windows_credential(CREDENTIAL_TARGET) or read_windows_credential(LEGACY_CREDENTIAL_TARGET)
+
+
 def delete_os_credential() -> None:
     if sys.platform == "win32":
         ctypes.windll.advapi32.CredDeleteW(CREDENTIAL_TARGET, 1, 0)
+        ctypes.windll.advapi32.CredDeleteW(LEGACY_CREDENTIAL_TARGET, 1, 0)
 
 MOCK_ITEMS = [
     {"id": 1042, "type": "Epic", "title": "Unified customer onboarding", "state": "Active", "children": 2, "selected": True},
@@ -252,7 +258,7 @@ def azure_request(
             "Authorization": f"Basic {token}",
             "Accept": "application/json",
             "Content-Type": content_type,
-            "User-Agent": "Azure-WorkSync/1.0",
+            "User-Agent": "SyncWorkTrack/1.0",
         },
     )
     try:
@@ -417,7 +423,7 @@ def work_item_patch(
                     "value": {
                         "rel": "Hyperlink",
                         "url": relation["url"],
-                        "attributes": {"comment": "Copied by Azure WorkSync"},
+                        "attributes": {"comment": "Copied by SyncWorkTrack"},
                     },
                 })
     return operations
@@ -526,7 +532,7 @@ def synchronize_links(
                             f"/{urllib.parse.quote(destination.project)}/_apis/wit/workItems/"
                             f"{target_destination_id}"
                         ),
-                        "attributes": {"comment": "Copied by Azure WorkSync"},
+                        "attributes": {"comment": "Copied by SyncWorkTrack"},
                     },
                 })
             if patch:
