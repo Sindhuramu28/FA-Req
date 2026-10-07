@@ -428,7 +428,6 @@ def load_source_work_items(ref: ProjectRef, pat: str, marker: str) -> list[dict[
         work_item_type = marker.removeprefix("type:")
         allowed_types = {
             "Epic", "Feature", "Requirement", "Task", "Test Case",
-            "User Story", "Product Backlog Item", "Bug", "Issue",
         }
         if work_item_type not in allowed_types:
             raise ValueError("Choose a supported work-item type filter.")

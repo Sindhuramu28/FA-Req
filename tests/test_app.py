@@ -43,6 +43,10 @@ class AppTests(unittest.TestCase):
             os.environ.pop("SYNCWORKTRACK_FIELD_PROTOTYPE", None)
             response = self.client.get("/")
         self.assertNotIn(b"Type-specific fields", response.data)
+        self.assertIn(b'value="type:Task"', response.data)
+        self.assertIn(b'value="type:Test Case"', response.data)
+        self.assertNotIn(b'value="type:Bug"', response.data)
+        self.assertNotIn(b'value="type:Issue"', response.data)
 
     def test_test_app_shows_disabled_type_specific_fields(self):
         with patch.dict(os.environ, {"SYNCWORKTRACK_FIELD_PROTOTYPE": "1"}):
