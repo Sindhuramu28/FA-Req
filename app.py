@@ -227,6 +227,23 @@ def initialize_database() -> None:
                     destination_organization, destination_project
                 )
             );
+            CREATE TABLE IF NOT EXISTS synced_attachments (
+                source_organization TEXT NOT NULL,
+                source_project TEXT NOT NULL,
+                source_id INTEGER NOT NULL,
+                source_attachment_url TEXT NOT NULL,
+                source_file_name TEXT NOT NULL,
+                destination_organization TEXT NOT NULL,
+                destination_project TEXT NOT NULL,
+                destination_id INTEGER NOT NULL,
+                destination_attachment_url TEXT NOT NULL,
+                synced_at TEXT NOT NULL,
+                PRIMARY KEY (
+                    source_organization, source_project, source_id,
+                    source_attachment_url,
+                    destination_organization, destination_project
+                )
+            );
             """
         )
 
@@ -303,6 +320,70 @@ def azure_request(
         raise RuntimeError(detail or f"Azure DevOps returned HTTP {exc.code}.") from exc
     except urllib.error.URLError as exc:
         raise ConnectionError("Azure DevOps could not be reached. Check the network and project URL.") from exc
+
+
+def azure_attachment_download(url: str, pat: str) -> bytes:
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").casefold()
+    if parsed.scheme.casefold() != "https" or not (
+        host == "dev.azure.com" or host.endswith(".visualstudio.com")
+    ):
+        raise ValueError("The source attachment URL is not a supported Azure DevOps address.")
+    token = base64.b64encode(f":{pat}".encode()).decode()
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Basic {token}", "User-Agent": "SyncWorkTrack/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise PermissionError("The PAT cannot read a source work-item attachment.") from exc
+        raise RuntimeError(f"Azure DevOps returned HTTP {exc.code} while downloading an attachment.") from exc
+    except urllib.error.URLError as exc:
+        raise ConnectionError("Azure DevOps could not be reached while downloading an attachment.") from exc
+
+
+def azure_attachment_upload(
+    destination: ProjectRef, pat: str, file_name: str, content: bytes
+) -> str:
+    safe_name = os.path.basename(file_name.replace("\\", "/")) or "attachment.bin"
+    token = base64.b64encode(f":{pat}".encode()).decode()
+    url = (
+        f"https://dev.azure.com/{urllib.parse.quote(destination.organization)}/"
+        f"{urllib.parse.quote(destination.project)}/_apis/wit/attachments"
+        f"?fileName={urllib.parse.quote(safe_name)}&api-version=7.1"
+    )
+    req = urllib.request.Request(
+        url,
+        data=content,
+        method="POST",
+        headers={
+            "Authorization": f"Basic {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/octet-stream",
+            "User-Agent": "SyncWorkTrack/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as response:
+            result = json.loads(response.read().decode())
+        attachment_url = str(result.get("url", ""))
+        if not attachment_url:
+            raise RuntimeError("Azure DevOps did not return the uploaded attachment URL.")
+        return attachment_url
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = json.loads(exc.read().decode()).get("message", "")
+        except Exception:
+            pass
+        if exc.code in (401, 403):
+            raise PermissionError("The PAT cannot upload an attachment to the destination project.") from exc
+        raise RuntimeError(detail or f"Azure DevOps returned HTTP {exc.code} while uploading an attachment.") from exc
+    except urllib.error.URLError as exc:
+        raise ConnectionError("Azure DevOps could not be reached while uploading an attachment.") from exc
 
 
 def session_id() -> str:
@@ -768,6 +849,125 @@ def synchronize_hyperlinks(
         return len(add_urls), len(remove_indexes), []
     except (ValueError, PermissionError, ConnectionError, RuntimeError) as exc:
         return 0, 0, [f"Hyperlinks for source {source_item['id']}: {exc}"]
+
+
+def synchronize_attachments(
+    source: ProjectRef,
+    destination: ProjectRef,
+    pat: str,
+    source_item: dict[str, Any],
+    destination_id: int,
+) -> tuple[int, int, list[str]]:
+    source_id = int(source_item["id"])
+    desired = {
+        str(relation.get("url")): (
+            os.path.basename(
+                str(relation.get("attributes", {}).get("name", "attachment.bin"))
+                .replace("\\", "/")
+            ) or "attachment.bin"
+        )
+        for relation in source_item.get("relations", [])
+        if relation.get("rel") == "AttachedFile" and relation.get("url")
+    }
+    try:
+        with database() as db:
+            tracked_rows = db.execute(
+                """SELECT source_attachment_url, source_file_name,
+                          destination_attachment_url
+                   FROM synced_attachments WHERE source_organization=?
+                   AND source_project=? AND source_id=?
+                   AND destination_organization=? AND destination_project=?""",
+                (source.organization, source.project, source_id,
+                 destination.organization, destination.project),
+            ).fetchall()
+        tracked = {
+            str(row["source_attachment_url"]): {
+                "name": str(row["source_file_name"]),
+                "destinationUrl": str(row["destination_attachment_url"]),
+            }
+            for row in tracked_rows
+        }
+        if not desired and not tracked:
+            return 0, 0, []
+        current = azure_request(
+            destination, pat,
+            f"_apis/wit/workitems/{destination_id}?$expand=Relations&api-version=7.1",
+        )
+        relations = current.get("relations", [])
+        existing = {
+            str(relation.get("url")): index
+            for index, relation in enumerate(relations)
+            if relation.get("rel") == "AttachedFile" and relation.get("url")
+        }
+        stale_source_urls = [url for url in tracked if url not in desired]
+        remove_indexes = sorted(
+            (
+                existing[tracked[url]["destinationUrl"]]
+                for url in stale_source_urls
+                if tracked[url]["destinationUrl"] in existing
+            ),
+            reverse=True,
+        )
+        patch = [
+            {"op": "remove", "path": f"/relations/{index}"}
+            for index in remove_indexes
+        ]
+        new_mappings: list[tuple[str, str, str]] = []
+        added = 0
+        for source_url, file_name in desired.items():
+            destination_url = tracked.get(source_url, {}).get("destinationUrl")
+            if destination_url is None:
+                content = azure_attachment_download(source_url, pat)
+                destination_url = azure_attachment_upload(
+                    destination, pat, file_name, content
+                )
+                new_mappings.append((source_url, file_name, destination_url))
+            if destination_url not in existing:
+                patch.append({
+                    "op": "add", "path": "/relations/-",
+                    "value": {
+                        "rel": "AttachedFile",
+                        "url": destination_url,
+                        "attributes": {
+                            "name": file_name,
+                            "comment": "Copied by SyncWorkTrack",
+                        },
+                    },
+                })
+                added += 1
+        if patch:
+            azure_request(
+                destination, pat,
+                f"_apis/wit/workitems/{destination_id}?api-version=7.1",
+                method="PATCH", payload=patch,
+                content_type="application/json-patch+json",
+            )
+        with database() as db:
+            for source_url in stale_source_urls:
+                db.execute(
+                    """DELETE FROM synced_attachments WHERE source_organization=?
+                       AND source_project=? AND source_id=?
+                       AND source_attachment_url=? AND destination_organization=?
+                       AND destination_project=?""",
+                    (source.organization, source.project, source_id, source_url,
+                     destination.organization, destination.project),
+                )
+            now = datetime.now(timezone.utc).isoformat()
+            for source_url, file_name, destination_url in new_mappings:
+                db.execute(
+                    """INSERT OR REPLACE INTO synced_attachments (
+                       source_organization, source_project, source_id,
+                       source_attachment_url, source_file_name,
+                       destination_organization, destination_project,
+                       destination_id, destination_attachment_url, synced_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (source.organization, source.project, source_id, source_url,
+                     file_name, destination.organization, destination.project,
+                     destination_id, destination_url, now),
+                )
+        return added, len(remove_indexes), []
+    except (ValueError, PermissionError, ConnectionError, RuntimeError, OSError) as exc:
+        return 0, 0, [f"Attachments for source {source_id}: {exc}"]
 
 
 def synchronize_comments(
@@ -1327,6 +1527,8 @@ def sync():
         comments_copied = 0
         hyperlinks_added = 0
         hyperlinks_removed = 0
+        attachments_added = 0
+        attachments_removed = 0
         for item in source_items:
             source_id = int(item["id"])
             source_fields = item.get("fields", {})
@@ -1347,14 +1549,26 @@ def sync():
                 and item.get("rev") is not None
                 and int(item["rev"]) <= int(mapping["last_source_revision"])
             ):
+                item_warnings: list[str] = []
+                if "Attachments" in selected_fields:
+                    added_count, removed_count, attachment_errors = synchronize_attachments(
+                        source, destination, pat, item, destination_id
+                    )
+                    attachments_added += added_count
+                    attachments_removed += removed_count
+                    destination_warnings.extend(attachment_errors)
+                    item_warnings.extend(attachment_errors)
                 destination_totals["skipped"] += 1
                 totals["skipped"] += 1
                 results.append({
                     "sourceId": source_id, "title": title, "type": item_type,
                     "destination": destination.project, "destinationId": destination_id,
-                    "action": "Up to date", "status": "Skipped", "error": "",
+                    "action": "Up to date", "status": (
+                        "Skipped with warnings" if item_warnings else "Skipped"
+                    ), "error": " | ".join(item_warnings),
                 })
                 continue
+            item_warnings: list[str] = []
             try:
                 patch = work_item_patch(
                     item, selected_fields, include_hyperlinks=destination_id is None,
@@ -1389,17 +1603,28 @@ def sync():
                     hyperlinks_added += added_count
                     hyperlinks_removed += removed_count
                     destination_warnings.extend(hyperlink_errors)
+                    item_warnings.extend(hyperlink_errors)
                 if "Discussions" in selected_fields:
                     comment_count, comment_errors = synchronize_comments(
                         source, destination, pat, item, destination_id
                     )
                     comments_copied += comment_count
                     destination_warnings.extend(comment_errors)
+                    item_warnings.extend(comment_errors)
+                if "Attachments" in selected_fields:
+                    added_count, removed_count, attachment_errors = synchronize_attachments(
+                        source, destination, pat, item, destination_id
+                    )
+                    attachments_added += added_count
+                    attachments_removed += removed_count
+                    destination_warnings.extend(attachment_errors)
+                    item_warnings.extend(attachment_errors)
                 results.append({
                     "sourceId": source_id, "title": title, "type": item_type,
                     "destination": destination.project, "destinationId": destination_id,
                     "action": "Updated" if action == "Update" else "Created",
-                    "status": "Success", "error": "",
+                    "status": "Success with warnings" if item_warnings else "Success",
+                    "error": " | ".join(item_warnings),
                 })
             except (ValueError, PermissionError, ConnectionError, RuntimeError, KeyError) as exc:
                 destination_totals["failed"] += 1
@@ -1427,6 +1652,8 @@ def sync():
             "comments": comments_copied,
             "hyperlinksAdded": hyperlinks_added,
             "hyperlinksRemoved": hyperlinks_removed,
+            "attachmentsAdded": attachments_added,
+            "attachmentsRemoved": attachments_removed,
             "warnings": destination_warnings,
             **destination_totals,
         })

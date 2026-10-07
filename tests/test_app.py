@@ -5,8 +5,8 @@ from unittest.mock import patch
 
 import app as app_module
 from app import (
-    app, load_source_work_items, parse_project_url, synchronize_hyperlinks, synchronize_links,
-    work_item_patch,
+    app, azure_attachment_download, load_source_work_items, parse_project_url,
+    synchronize_attachments, synchronize_hyperlinks, synchronize_links, work_item_patch,
 )
 
 
@@ -374,6 +374,67 @@ class AppTests(unittest.TestCase):
         patch_document = azure_request.call_args_list[1].kwargs["payload"]
         self.assertEqual(patch_document[0], {"op": "remove", "path": "/relations/0"})
         self.assertEqual(patch_document[1]["value"]["url"], "https://new.example")
+
+    @patch("app.azure_attachment_upload", return_value="https://dest.example/attachment/1")
+    @patch("app.azure_attachment_download", return_value=b"file contents")
+    @patch("app.azure_request")
+    def test_attachment_sync_uploads_adds_and_tracks_file(
+        self, azure_request, attachment_download, attachment_upload
+    ):
+        azure_request.side_effect = [{"relations": []}, {"id": 101}]
+        source = parse_project_url("https://dev.azure.com/example/source")
+        destination = parse_project_url("https://dev.azure.com/example/destination")
+        added, removed, errors = synchronize_attachments(
+            source, destination, "pat", {
+                "id": 1,
+                "relations": [{
+                    "rel": "AttachedFile",
+                    "url": "https://dev.azure.com/example/_apis/wit/attachments/source-1",
+                    "attributes": {"name": "report.pdf"},
+                }],
+            }, 101,
+        )
+        self.assertEqual((added, removed, errors), (1, 0, []))
+        attachment_download.assert_called_once()
+        attachment_upload.assert_called_once_with(
+            destination, "pat", "report.pdf", b"file contents"
+        )
+        patch_document = azure_request.call_args_list[1].kwargs["payload"]
+        self.assertEqual(patch_document[0]["value"]["rel"], "AttachedFile")
+        self.assertEqual(
+            patch_document[0]["value"]["url"], "https://dest.example/attachment/1"
+        )
+        with app_module.database() as db:
+            tracked = db.execute("SELECT COUNT(*) AS count FROM synced_attachments").fetchone()
+        self.assertEqual(tracked["count"], 1)
+
+    @patch("app.azure_request")
+    def test_attachment_sync_removes_only_obsolete_tracked_file(self, azure_request):
+        with app_module.database() as db:
+            db.execute(
+                """INSERT INTO synced_attachments VALUES
+                   ('example', 'source', 1, 'https://source/old', 'old.pdf',
+                    'example', 'destination', 101, 'https://destination/tracked', 'now')"""
+            )
+        azure_request.side_effect = [{"relations": [
+            {"rel": "AttachedFile", "url": "https://destination/tracked"},
+            {"rel": "AttachedFile", "url": "https://destination/manual"},
+        ]}, {"id": 101}]
+        source = parse_project_url("https://dev.azure.com/example/source")
+        destination = parse_project_url("https://dev.azure.com/example/destination")
+        added, removed, errors = synchronize_attachments(
+            source, destination, "pat", {"id": 1, "relations": []}, 101
+        )
+        self.assertEqual((added, removed, errors), (0, 1, []))
+        patch_document = azure_request.call_args_list[1].kwargs["payload"]
+        self.assertEqual(patch_document, [{"op": "remove", "path": "/relations/0"}])
+        with app_module.database() as db:
+            tracked = db.execute("SELECT COUNT(*) AS count FROM synced_attachments").fetchone()
+        self.assertEqual(tracked["count"], 0)
+
+    def test_attachment_download_rejects_untrusted_url(self):
+        with self.assertRaises(ValueError):
+            azure_attachment_download("https://malicious.example/file", "pat")
 
     @patch("app.azure_request")
     def test_manual_loading_does_not_restrict_work_item_types(self, azure_request):

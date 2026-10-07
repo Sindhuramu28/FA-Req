@@ -220,11 +220,11 @@ $("#runButton").addEventListener("click", async () => {
   try {
     const payload = currentConfig(); payload.confirmation = "SYNC";
     const data = await post("/api/sync", payload);
-    const totals = data.entries.reduce((sum,row) => ({created:sum.created+row.created,updated:sum.updated+row.updated,skipped:sum.skipped+row.skipped,failed:sum.failed+row.failed}), {created:0,updated:0,skipped:0,failed:0});
+    const totals = data.entries.reduce((sum,row) => ({created:sum.created+row.created,updated:sum.updated+row.updated,skipped:sum.skipped+row.skipped,failed:sum.failed+row.failed,attachmentsAdded:sum.attachmentsAdded+(row.attachmentsAdded||0),attachmentsRemoved:sum.attachmentsRemoved+(row.attachmentsRemoved||0)}), {created:0,updated:0,skipped:0,failed:0,attachmentsAdded:0,attachmentsRemoved:0});
     $("#resultTitle").textContent = "Synchronization complete"; $("#resultMessage").textContent = `${data.runId} · ${data.message}`;
     $("#resultGrid").innerHTML = [
       ["Destinations", data.entries.length, "Processed"], ["Created", totals.created, "Azure items"], ["Updated", totals.updated, "Azure items"],
-      ["Up to date", totals.skipped, "Skipped"], ["Failed", totals.failed, "Items"]
+      ["Up to date", totals.skipped, "Skipped"], ["Attachments", totals.attachmentsAdded, `${totals.attachmentsRemoved} removed`], ["Failed", totals.failed, "Items"]
     ].map(([label,value,note]) => `<div class="result-stat"><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`).join("");
     $("#changeRows").innerHTML = (data.results || []).map(change => `
       <tr><td>${change.sourceId}</td><td>${escapeHtml(change.title)}</td><td>${escapeHtml(change.type)}</td><td>${escapeHtml(change.destination)}</td><td>${change.destinationId || "—"}</td><td><span class="action-chip ${actionClass(change.action)}">${escapeHtml(change.action)}</span></td><td>${escapeHtml(change.status)}${change.error ? `<br><small class="error-text">${escapeHtml(change.error)}</small>` : ""}</td></tr>`).join("");

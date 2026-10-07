@@ -13,7 +13,7 @@ A Python/Flask desktop app for one-way Azure DevOps work-item synchronization fr
 - Exact Type + Title match discovery for linking pre-existing destination items without creating duplicates
 - Local source-to-destination ID mappings in `%LOCALAPPDATA%\FA-Sync-Console\fa-sync.db`
 - Optional PAT storage in Windows Credential Manager; the PAT is never written to app files
-- Automatic `FA-Synced` destination tag, reconciled mapped work-item links, synchronized hyperlinks, and optional discussions
+- Automatic `FA-Synced` destination tag, reconciled mapped work-item links, synchronized hyperlinks and attachments, and optional discussions
 - Optional daily synchronization through Windows Task Scheduler, using a PAT stored only in Windows Credential Manager
 - Per-item destination IDs and error reports
 
@@ -42,7 +42,9 @@ Use a PAT with **Work Items: Read & write** access to the source and every desti
 
 ## Live synchronization safety
 
-Preview is always read-only. A live run requires enabling **Activate** and accepting a separate confirmation. Selected fields are synchronized; Title remains mandatory when a new destination item is created. The `FA-Synced` tracking tag is always retained. Selected hyperlinks and mapped Azure work-item links are reconciled on later runs. State is never included in Azure create or update requests.
+Preview is always read-only. A live run requires enabling **Activate** and accepting a separate confirmation. Selected fields are synchronized; Title remains mandatory when a new destination item is created. The `FA-Synced` tracking tag is always retained. Selected hyperlinks, attachments, and mapped Azure work-item links are reconciled on later runs. State is never included in Azure create or update requests.
+
+When **Attachments** is selected, files attached to the source work item are downloaded and uploaded to each destination work item. SyncWorkTrack records each transferred file locally so later runs do not upload duplicates. If a source attachment is removed, only the corresponding attachment previously created and tracked by SyncWorkTrack is removed; destination-owned files are left untouched. Inline images embedded inside rich-text fields are not currently rewritten to their new destination attachment URLs.
 
 ## Daily scheduling
 
