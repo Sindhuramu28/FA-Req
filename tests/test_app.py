@@ -38,6 +38,21 @@ class AppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["status"], "ok")
 
+    def test_standard_app_hides_type_specific_field_prototype(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SYNCWORKTRACK_FIELD_PROTOTYPE", None)
+            response = self.client.get("/")
+        self.assertNotIn(b"Type-specific fields", response.data)
+
+    def test_test_app_shows_disabled_type_specific_fields(self):
+        with patch.dict(os.environ, {"SYNCWORKTRACK_FIELD_PROTOTYPE": "1"}):
+            response = self.client.get("/")
+        self.assertIn(b"Type-specific fields", response.data)
+        self.assertIn(b"Customer requirement", response.data)
+        self.assertIn(b"System requirement", response.data)
+        self.assertIn(b"TestSyncApp", response.data)
+        self.assertIn(b'<fieldset class="type-fields" disabled>', response.data)
+
     def test_preview_requires_items(self):
         response = self.client.post("/api/preview", json={"selectedIds": [], "destinations": ["x"]})
         self.assertEqual(response.status_code, 400)

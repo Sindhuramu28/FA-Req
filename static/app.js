@@ -52,6 +52,22 @@ function updateMetrics() {
   try { const parts = new URL($("#source").value).pathname.split("/").filter(Boolean); $("#sourceMetric").textContent = parts.at(-1) || "Not configured"; } catch { $("#sourceMetric").textContent = "Not configured"; }
 }
 
+function updateTypeSpecificFields() {
+  const list = $("#typeFieldList");
+  if (!list) return;
+  const marker = $("#faMarker").value;
+  const selectedType = marker.startsWith("type:") ? marker.slice(5) : "";
+  let visible = 0;
+  list.querySelectorAll("[data-types]").forEach(label => {
+    const show = label.dataset.types === selectedType;
+    label.classList.toggle("hidden", !show);
+    if (show) visible += 1;
+  });
+  $("#typeFieldHint").textContent = visible
+    ? `${selectedType} fields are shown for review and remain disabled in this prototype.`
+    : "Choose a work-item type in Selection to see its additional fields.";
+}
+
 function currentConfig() {
   const selectedItems = state.items.filter(item => item.selected);
   return {
@@ -130,6 +146,7 @@ function renderMatches(rows) {
 async function init() {
   renderDestinations();
   renderItems();
+  updateTypeSpecificFields();
   const response = await fetch("/api/credential-status");
   const credential = await response.json();
   if (credential.stored) {
@@ -159,6 +176,7 @@ $("#itemRows").addEventListener("change", event => {
 });
 $("#searchItems").addEventListener("input", event => renderItems(event.target.value));
 $("#faMarker").addEventListener("change", async () => {
+  updateTypeSpecificFields();
   try { const data = await loadSourceItems(); showToast(data.message); }
   catch (error) { showToast(error.message, true); }
 });

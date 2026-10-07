@@ -38,6 +38,8 @@ Open `http://127.0.0.1:5000`.
 
 The packaged `SyncWorkTrack.exe` opens as a desktop application. It does not show a console, browser address, or local IP. Closing the desktop window stops the application and clears the session PAT unless the user explicitly saved it in Windows Credential Manager.
 
+`testsyncapp.exe` is a separate UI prototype. It displays disabled, type-specific field choices when Epic, Feature, Requirement, Task, or Test Case is selected. These prototype choices are intentionally visual-only and are never included in Azure synchronization requests. The regular `SyncWorkTrack.exe` does not display this section.
+
 ## PAT handling
 
 Use a PAT with **Work Items: Read & write** access to the source and every destination project. The PAT is posted to the Python backend for validation and retained only in process memory under a random session identifier. If **Remember securely** is selected, it is stored in Windows Credential Manager. It is never written to project files, logs, cookies, browser storage, or environment files.

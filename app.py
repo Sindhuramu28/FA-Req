@@ -1171,7 +1171,12 @@ def secure_headers(response):
 
 @app.get("/")
 def index():
-    return render_template("index.html")
+    prototype = os.environ.get("SYNCWORKTRACK_FIELD_PROTOTYPE") == "1"
+    return render_template(
+        "index.html",
+        test_field_prototype=prototype,
+        app_name="TestSyncApp" if prototype else "SyncWorkTrack",
+    )
 
 
 @app.post("/api/work-items")
