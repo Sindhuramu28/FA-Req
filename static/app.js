@@ -6,7 +6,12 @@ const state = {
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[character]));
-const actionClass = action => String(action).toLowerCase().includes("update") ? "update" : "create";
+const actionClass = action => {
+  const value = String(action).toLowerCase();
+  if (value.includes("up to date")) return "current";
+  if (value.includes("change") || value.includes("update")) return "update";
+  return "create";
+};
 
 function showToast(message, error = false) {
   const toast = $("#toast");
@@ -82,7 +87,7 @@ function showPreview(data) {
   $("#resultMessage").textContent = data.message;
   $("#resultGrid").innerHTML = [
     ["Work items", s.items, "Selected"], ["Destinations", s.destinations, "Configured"],
-    ["Creates", s.creates, "Expected"], ["Updates", s.updates, "Expected"], ["Hierarchy links", s.relationships, "Not enabled"]
+    ["Creates", s.creates, "Expected"], ["Changes", s.updates, "To synchronize"], ["Up to date", s.upToDate || 0, "No action"]
   ].map(([label,value,note]) => `<div class="result-stat"><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`).join("");
   $("#changeRows").innerHTML = (data.changes || []).map(change => `
     <tr><td>${change.sourceId}</td><td>${escapeHtml(change.title)}</td><td>${escapeHtml(change.type)}</td><td>${escapeHtml(change.destination)}</td><td>${change.destinationId || "—"}</td><td><span class="action-chip ${actionClass(change.action)}">${escapeHtml(change.action)}</span></td><td>${escapeHtml(change.status || "Planned")}${change.error ? `<br><small class="error-text">${escapeHtml(change.error)}</small>` : ""}</td></tr>`).join("");
@@ -172,11 +177,11 @@ $("#runButton").addEventListener("click", async () => {
   try {
     const payload = currentConfig(); payload.confirmation = "SYNC";
     const data = await post("/api/sync", payload);
-    const totals = data.entries.reduce((sum,row) => ({created:sum.created+row.created,updated:sum.updated+row.updated,failed:sum.failed+row.failed}), {created:0,updated:0,failed:0});
+    const totals = data.entries.reduce((sum,row) => ({created:sum.created+row.created,updated:sum.updated+row.updated,skipped:sum.skipped+row.skipped,failed:sum.failed+row.failed}), {created:0,updated:0,skipped:0,failed:0});
     $("#resultTitle").textContent = "Synchronization complete"; $("#resultMessage").textContent = `${data.runId} · ${data.message}`;
     $("#resultGrid").innerHTML = [
       ["Destinations", data.entries.length, "Processed"], ["Created", totals.created, "Azure items"], ["Updated", totals.updated, "Azure items"],
-      ["Failed", totals.failed, "Items"], ["Duration", data.duration, "Total"]
+      ["Up to date", totals.skipped, "Skipped"], ["Failed", totals.failed, "Items"]
     ].map(([label,value,note]) => `<div class="result-stat"><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`).join("");
     $("#changeRows").innerHTML = (data.results || []).map(change => `
       <tr><td>${change.sourceId}</td><td>${escapeHtml(change.title)}</td><td>${escapeHtml(change.type)}</td><td>${escapeHtml(change.destination)}</td><td>${change.destinationId || "—"}</td><td><span class="action-chip ${actionClass(change.action)}">${escapeHtml(change.action)}</span></td><td>${escapeHtml(change.status)}${change.error ? `<br><small class="error-text">${escapeHtml(change.error)}</small>` : ""}</td></tr>`).join("");

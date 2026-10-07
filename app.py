@@ -15,9 +15,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterator
 
 from flask import Flask, jsonify, render_template, request, session
 
@@ -141,11 +142,19 @@ def data_directory() -> str:
 DATABASE_PATH = os.path.join(data_directory(), "fa-sync.db")
 
 
-def database() -> sqlite3.Connection:
+@contextmanager
+def database() -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(DATABASE_PATH)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-    return connection
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def initialize_database() -> None:
@@ -713,6 +722,7 @@ def preview():
         int(item.get("id")): {
             "title": str(item.get("title", "Untitled")),
             "type": str(item.get("type", "Unknown")),
+            "rev": item.get("rev"),
         }
         for item in selected_items if item.get("id") is not None
     }
@@ -731,29 +741,45 @@ def preview():
             ).fetchone()
             mapped_pairs += int(row["count"])
             mapping_rows = db.execute(
-                f"""SELECT source_id, destination_id FROM work_item_mappings
+                f"""SELECT source_id, destination_id, last_source_revision FROM work_item_mappings
                     WHERE source_organization=? AND source_project=?
                     AND destination_organization=? AND destination_project=?
                     AND source_id IN ({placeholders})""",
                 [source.organization, source.project, destination.organization,
                  destination.project, *selected_ids],
             ).fetchall()
-            mapped = {int(item["source_id"]): int(item["destination_id"]) for item in mapping_rows}
+            mapped = {
+                int(item["source_id"]): {
+                    "destinationId": int(item["destination_id"]),
+                    "lastRevision": item["last_source_revision"],
+                }
+                for item in mapping_rows
+            }
             for source_id in selected_ids:
                 numeric_id = int(source_id)
                 details = item_details.get(numeric_id, {})
-                destination_id = mapped.get(numeric_id)
+                mapping = mapped.get(numeric_id)
+                destination_id = mapping["destinationId"] if mapping else None
+                current_revision = details.get("rev")
+                last_revision = mapping["lastRevision"] if mapping else None
+                if mapping is None:
+                    action = "To create"
+                elif last_revision is None or current_revision is None or int(current_revision) > int(last_revision):
+                    action = "Changes to sync"
+                else:
+                    action = "Up to date"
                 changes.append({
                     "sourceId": numeric_id,
                     "title": details.get("title", "Untitled"),
                     "type": details.get("type", "Unknown"),
                     "destination": destination.project,
                     "destinationId": destination_id,
-                    "action": "Updated" if destination_id is not None else "To create",
+                    "action": action,
                 })
     total_pairs = len(selected_ids) * len(destination_refs)
     create_count = total_pairs - mapped_pairs
-    update_count = mapped_pairs
+    update_count = sum(1 for change in changes if change["action"] == "Changes to sync")
+    up_to_date_count = sum(1 for change in changes if change["action"] == "Up to date")
     return jsonify({
         "ok": True,
         "summary": {
@@ -761,6 +787,7 @@ def preview():
             "destinations": len(destinations),
             "creates": create_count,
             "updates": update_count,
+            "upToDate": up_to_date_count,
             "relationships": 0,
             "fields": len(fields),
         },
@@ -824,7 +851,7 @@ def sync():
             item_type = source_fields.get("System.WorkItemType", "Unknown")
             with database() as db:
                 mapping = db.execute(
-                    """SELECT destination_id FROM work_item_mappings
+                    """SELECT destination_id, last_source_revision FROM work_item_mappings
                        WHERE source_organization=? AND source_project=? AND source_id=?
                        AND destination_organization=? AND destination_project=?""",
                     (source.organization, source.project, source_id,
@@ -832,6 +859,19 @@ def sync():
                 ).fetchone()
             destination_id = int(mapping["destination_id"]) if mapping else None
             action = "Update" if destination_id is not None else "Create"
+            if (
+                mapping and mapping["last_source_revision"] is not None
+                and item.get("rev") is not None
+                and int(item["rev"]) <= int(mapping["last_source_revision"])
+            ):
+                destination_totals["skipped"] += 1
+                totals["skipped"] += 1
+                results.append({
+                    "sourceId": source_id, "title": title, "type": item_type,
+                    "destination": destination.project, "destinationId": destination_id,
+                    "action": "Up to date", "status": "Skipped", "error": "",
+                })
+                continue
             try:
                 patch = work_item_patch(
                     item, selected_fields, include_hyperlinks=destination_id is None,
@@ -914,7 +954,8 @@ def sync():
         "results": results,
         "message": (
             f"Live synchronization finished: {totals['created']} created, "
-            f"{totals['updated']} updated, {totals['failed']} failed. Destination states were not changed."
+            f"{totals['updated']} updated, {totals['skipped']} already up to date, "
+            f"{totals['failed']} failed. Destination states were not changed."
         ),
     })
 
