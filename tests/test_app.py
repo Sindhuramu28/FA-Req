@@ -4,7 +4,10 @@ import unittest
 from unittest.mock import patch
 
 import app as app_module
-from app import app, load_source_work_items, parse_project_url, work_item_patch
+from app import (
+    app, load_source_work_items, parse_project_url, synchronize_hyperlinks, synchronize_links,
+    work_item_patch,
+)
 
 
 class AppTests(unittest.TestCase):
@@ -123,6 +126,19 @@ class AppTests(unittest.TestCase):
         )
         self.assertEqual(operation["value"], "High impact")
 
+    def test_test_case_steps_are_copied_without_state(self):
+        patch_document = work_item_patch({
+            "fields": {
+                "System.Title": "Verify protection",
+                "System.State": "Closed",
+                "Microsoft.VSTS.TCM.Steps": "<steps id=\"0\"><step /></steps>",
+            },
+            "relations": [],
+        }, ["Title", "Test steps"])
+        values = {operation["path"]: operation["value"] for operation in patch_document}
+        self.assertIn("/fields/Microsoft.VSTS.TCM.Steps", values)
+        self.assertNotIn("/fields/System.State", values)
+
     def test_title_can_be_excluded_from_updates(self):
         patch_document = work_item_patch({
             "fields": {"System.Title": "Do not copy"}, "relations": []
@@ -134,6 +150,17 @@ class AppTests(unittest.TestCase):
         response = self.client.get("/api/credential-status")
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json["stored"])
+
+    @patch("app.save_schedule_configuration")
+    def test_daily_schedule_endpoint(self, save_configuration):
+        save_configuration.return_value = {
+            "scheduleTime": "07:00", "selectedIds": [12],
+            "destinations": ["https://dev.azure.com/example/destination"],
+        }
+        response = self.client.post("/api/schedule", json={"scheduleTime": "07:00"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["enabled"])
+        self.assertEqual(response.json["time"], "07:00")
 
     def test_live_sync_requires_explicit_confirmation(self):
         response = self.client.post("/api/sync", json={
@@ -186,6 +213,75 @@ class AppTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 400)
         self.assertIn("Validate", response.json["message"])
+
+    @patch("app.azure_request")
+    def test_relationship_sync_adds_and_tracks_mapped_parent_child_link(self, azure_request):
+        self.add_mapping(source_id=1, destination_id=101)
+        self.add_mapping(source_id=2, destination_id=102)
+        azure_request.side_effect = [{"relations": []}, {"id": 101}]
+        source = parse_project_url("https://dev.azure.com/example/source")
+        destination = parse_project_url("https://dev.azure.com/example/destination")
+        added, removed, errors = synchronize_links(source, destination, "pat", [{
+            "id": 1,
+            "relations": [{
+                "rel": "System.LinkTypes.Hierarchy-Forward",
+                "url": "https://dev.azure.com/example/_apis/wit/workItems/2",
+            }],
+        }])
+        self.assertEqual((added, removed, errors), (1, 0, []))
+        patch_document = azure_request.call_args_list[1].kwargs["payload"]
+        self.assertEqual(patch_document[0]["value"]["rel"], "System.LinkTypes.Hierarchy-Forward")
+        with app_module.database() as db:
+            tracked = db.execute("SELECT COUNT(*) AS count FROM synced_relations").fetchone()
+        self.assertEqual(tracked["count"], 1)
+
+    @patch("app.azure_request")
+    def test_relationship_sync_removes_only_obsolete_tracked_link(self, azure_request):
+        self.add_mapping(source_id=1, destination_id=101)
+        self.add_mapping(source_id=2, destination_id=102)
+        with app_module.database() as db:
+            db.execute(
+                """INSERT INTO synced_relations VALUES
+                   ('example', 'source', 1, 2, 'System.LinkTypes.Hierarchy-Forward',
+                    'example', 'destination', 101, 102, 'now')"""
+            )
+        azure_request.side_effect = [{"relations": [{
+            "rel": "System.LinkTypes.Hierarchy-Forward",
+            "url": "https://dev.azure.com/example/_apis/wit/workItems/102",
+        }]}, {"id": 101}]
+        source = parse_project_url("https://dev.azure.com/example/source")
+        destination = parse_project_url("https://dev.azure.com/example/destination")
+        added, removed, errors = synchronize_links(
+            source, destination, "pat", [{"id": 1, "relations": []}]
+        )
+        self.assertEqual((added, removed, errors), (0, 1, []))
+        patch_document = azure_request.call_args_list[1].kwargs["payload"]
+        self.assertEqual(patch_document, [{"op": "remove", "path": "/relations/0"}])
+        with app_module.database() as db:
+            tracked = db.execute("SELECT COUNT(*) AS count FROM synced_relations").fetchone()
+        self.assertEqual(tracked["count"], 0)
+
+    @patch("app.azure_request")
+    def test_hyperlink_sync_adds_new_and_removes_only_managed_obsolete_links(self, azure_request):
+        azure_request.side_effect = [{"relations": [
+            {
+                "rel": "Hyperlink", "url": "https://obsolete.example",
+                "attributes": {"comment": "Copied by SyncWorkTrack"},
+            },
+            {
+                "rel": "Hyperlink", "url": "https://destination-owned.example",
+                "attributes": {"comment": "Added manually"},
+            },
+        ]}, {"id": 101}]
+        destination = parse_project_url("https://dev.azure.com/example/destination")
+        added, removed, errors = synchronize_hyperlinks(destination, "pat", {
+            "id": 1,
+            "relations": [{"rel": "Hyperlink", "url": "https://new.example"}],
+        }, 101)
+        self.assertEqual((added, removed, errors), (1, 1, []))
+        patch_document = azure_request.call_args_list[1].kwargs["payload"]
+        self.assertEqual(patch_document[0], {"op": "remove", "path": "/relations/0"})
+        self.assertEqual(patch_document[1]["value"]["url"], "https://new.example")
 
     @patch("app.azure_request")
     def test_manual_loading_does_not_restrict_work_item_types(self, azure_request):

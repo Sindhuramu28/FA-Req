@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -17,7 +18,7 @@ import urllib.request
 import webbrowser
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
 from flask import Flask, jsonify, render_template, request, session
@@ -73,6 +74,7 @@ PAT_VAULT = PatVault()
 CREDENTIAL_TARGET = "SyncWorkTrack PAT"
 LEGACY_CREDENTIAL_TARGET = "Azure WorkSync PAT"
 DESTINATION_TAG = "FA-Synced"
+SCHEDULE_TASK_NAME = "SyncWorkTrack Daily Synchronization"
 
 
 class CREDENTIALW(ctypes.Structure):
@@ -140,6 +142,8 @@ def data_directory() -> str:
 
 
 DATABASE_PATH = os.path.join(data_directory(), "fa-sync.db")
+SCHEDULE_CONFIG_PATH = os.path.join(data_directory(), "schedule.json")
+SCHEDULE_LOG_PATH = os.path.join(data_directory(), "schedule.log")
 
 
 @contextmanager
@@ -203,6 +207,23 @@ def initialize_database() -> None:
                 synced_at TEXT NOT NULL,
                 PRIMARY KEY (
                     source_organization, source_project, source_id, source_comment_id,
+                    destination_organization, destination_project
+                )
+            );
+            CREATE TABLE IF NOT EXISTS synced_relations (
+                source_organization TEXT NOT NULL,
+                source_project TEXT NOT NULL,
+                source_id INTEGER NOT NULL,
+                source_target_id INTEGER NOT NULL,
+                relation_type TEXT NOT NULL,
+                destination_organization TEXT NOT NULL,
+                destination_project TEXT NOT NULL,
+                destination_id INTEGER NOT NULL,
+                destination_target_id INTEGER NOT NULL,
+                synced_at TEXT NOT NULL,
+                PRIMARY KEY (
+                    source_organization, source_project, source_id,
+                    source_target_id, relation_type,
                     destination_organization, destination_project
                 )
             );
@@ -364,6 +385,7 @@ FIELD_MAP = {
     "Title": "System.Title",
     "Description": "System.Description",
     "Tags": "System.Tags",
+    "Test steps": "Microsoft.VSTS.TCM.Steps",
 }
 
 
@@ -487,40 +509,64 @@ def synchronize_links(
     destination: ProjectRef,
     pat: str,
     source_items: list[dict[str, Any]],
-) -> tuple[int, list[str]]:
+) -> tuple[int, int, list[str]]:
     selected_ids = [int(item["id"]) for item in source_items]
     related_ids = {
         target_id for item in source_items for relation in item.get("relations", [])
         if (target_id := related_work_item_id(str(relation.get("url", "")))) is not None
     }
     mappings = destination_mappings(source, destination, selected_ids + sorted(related_ids))
-    copied = 0
+    added = 0
+    removed = 0
     errors: list[str] = []
     for item in source_items:
         source_id = int(item["id"])
         destination_id = mappings.get(source_id)
         if not destination_id:
             continue
-        candidates = []
+        desired: dict[tuple[str, int], int] = {}
         for relation in item.get("relations", []):
             relation_type = str(relation.get("rel", ""))
             target_source_id = related_work_item_id(str(relation.get("url", "")))
             if not relation_type.startswith("System.LinkTypes.") or target_source_id not in mappings:
                 continue
-            candidates.append((relation_type, mappings[target_source_id]))
-        if not candidates:
-            continue
+            desired[(relation_type, mappings[target_source_id])] = target_source_id
         try:
+            with database() as db:
+                tracked_rows = db.execute(
+                    """SELECT source_target_id, relation_type, destination_target_id
+                       FROM synced_relations WHERE source_organization=?
+                       AND source_project=? AND source_id=?
+                       AND destination_organization=? AND destination_project=?""",
+                    (source.organization, source.project, source_id,
+                     destination.organization, destination.project),
+                ).fetchall()
+            if not desired and not tracked_rows:
+                continue
             current = azure_request(
                 destination, pat,
                 f"_apis/wit/workitems/{destination_id}?$expand=Relations&api-version=7.1",
             )
+            current_relations = current.get("relations", [])
             existing = {
-                (str(link.get("rel", "")), related_work_item_id(str(link.get("url", ""))))
-                for link in current.get("relations", [])
+                (str(link.get("rel", "")), related_work_item_id(str(link.get("url", "")))): index
+                for index, link in enumerate(current_relations)
             }
-            patch = []
-            for relation_type, target_destination_id in candidates:
+            tracked = {
+                (str(row["relation_type"]), int(row["destination_target_id"])):
+                    int(row["source_target_id"])
+                for row in tracked_rows
+            }
+            stale = [key for key in tracked if key not in desired]
+            remove_indexes = sorted(
+                (existing[key] for key in stale if key in existing), reverse=True
+            )
+            patch = [
+                {"op": "remove", "path": f"/relations/{index}"}
+                for index in remove_indexes
+            ]
+            additions: list[tuple[str, int, int]] = []
+            for (relation_type, target_destination_id), target_source_id in desired.items():
                 if (relation_type, target_destination_id) in existing:
                     continue
                 patch.append({
@@ -535,6 +581,7 @@ def synchronize_links(
                         "attributes": {"comment": "Copied by SyncWorkTrack"},
                     },
                 })
+                additions.append((relation_type, target_source_id, target_destination_id))
             if patch:
                 azure_request(
                     destination, pat,
@@ -542,10 +589,89 @@ def synchronize_links(
                     method="PATCH", payload=patch,
                     content_type="application/json-patch+json",
                 )
-                copied += len(patch)
+            with database() as db:
+                for relation_type, target_destination_id in stale:
+                    db.execute(
+                        """DELETE FROM synced_relations WHERE source_organization=?
+                           AND source_project=? AND source_id=? AND relation_type=?
+                           AND destination_organization=? AND destination_project=?
+                           AND destination_target_id=?""",
+                        (source.organization, source.project, source_id, relation_type,
+                         destination.organization, destination.project,
+                         target_destination_id),
+                    )
+                now = datetime.now(timezone.utc).isoformat()
+                for relation_type, target_source_id, target_destination_id in additions:
+                    db.execute(
+                        """INSERT OR REPLACE INTO synced_relations (
+                           source_organization, source_project, source_id,
+                           source_target_id, relation_type, destination_organization,
+                           destination_project, destination_id,
+                           destination_target_id, synced_at
+                           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (source.organization, source.project, source_id, target_source_id,
+                         relation_type, destination.organization, destination.project,
+                         destination_id, target_destination_id, now),
+                    )
+            added += len(additions)
+            removed += len(remove_indexes)
         except (ValueError, PermissionError, ConnectionError, RuntimeError) as exc:
             errors.append(f"Links for source {source_id}: {exc}")
-    return copied, errors
+    return added, removed, errors
+
+
+def synchronize_hyperlinks(
+    destination: ProjectRef,
+    pat: str,
+    source_item: dict[str, Any],
+    destination_id: int,
+) -> tuple[int, int, list[str]]:
+    desired_urls = {
+        str(relation.get("url")) for relation in source_item.get("relations", [])
+        if relation.get("rel") == "Hyperlink" and relation.get("url")
+    }
+    try:
+        current = azure_request(
+            destination, pat,
+            f"_apis/wit/workitems/{destination_id}?$expand=Relations&api-version=7.1",
+        )
+        relations = current.get("relations", [])
+        existing_urls = {
+            str(relation.get("url")) for relation in relations
+            if relation.get("rel") == "Hyperlink" and relation.get("url")
+        }
+        managed = {
+            index: str(relation.get("url"))
+            for index, relation in enumerate(relations)
+            if relation.get("rel") == "Hyperlink"
+            and relation.get("attributes", {}).get("comment") == "Copied by SyncWorkTrack"
+        }
+        remove_indexes = sorted(
+            (index for index, url in managed.items() if url not in desired_urls),
+            reverse=True,
+        )
+        add_urls = sorted(desired_urls - existing_urls)
+        patch = [
+            {"op": "remove", "path": f"/relations/{index}"}
+            for index in remove_indexes
+        ]
+        patch.extend({
+            "op": "add", "path": "/relations/-",
+            "value": {
+                "rel": "Hyperlink", "url": url,
+                "attributes": {"comment": "Copied by SyncWorkTrack"},
+            },
+        } for url in add_urls)
+        if patch:
+            azure_request(
+                destination, pat,
+                f"_apis/wit/workitems/{destination_id}?api-version=7.1",
+                method="PATCH", payload=patch,
+                content_type="application/json-patch+json",
+            )
+        return len(add_urls), len(remove_indexes), []
+    except (ValueError, PermissionError, ConnectionError, RuntimeError) as exc:
+        return 0, 0, [f"Hyperlinks for source {source_item['id']}: {exc}"]
 
 
 def synchronize_comments(
@@ -594,6 +720,125 @@ def synchronize_comments(
     except (ValueError, PermissionError, ConnectionError, RuntimeError, KeyError) as exc:
         errors.append(f"Discussions for source {source_id}: {exc}")
     return copied, errors
+
+
+def load_schedule_configuration() -> dict[str, Any] | None:
+    try:
+        with open(SCHEDULE_CONFIG_PATH, "r", encoding="utf-8") as handle:
+            value = json.load(handle)
+        return value if isinstance(value, dict) else None
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def scheduled_command() -> str:
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}" --scheduled-run'
+    launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "desktop.py")
+    return f'"{sys.executable}" "{launcher}" --scheduled-run'
+
+
+def install_daily_task(run_time: str) -> None:
+    if sys.platform != "win32":
+        raise RuntimeError("Daily scheduling is available only on Windows.")
+    completed = subprocess.run(
+        [
+            "schtasks.exe", "/Create", "/TN", SCHEDULE_TASK_NAME,
+            "/TR", scheduled_command(), "/SC", "DAILY", "/ST", run_time, "/F",
+        ],
+        capture_output=True,
+        text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        raise RuntimeError(detail or "Windows could not create the daily synchronization task.")
+
+
+def remove_daily_task() -> None:
+    if sys.platform == "win32":
+        subprocess.run(
+            ["schtasks.exe", "/Delete", "/TN", SCHEDULE_TASK_NAME, "/F"],
+            capture_output=True,
+            text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    try:
+        os.remove(SCHEDULE_CONFIG_PATH)
+    except FileNotFoundError:
+        pass
+
+
+def next_daily_run(run_time: str, now: datetime | None = None) -> str:
+    current = now or datetime.now().astimezone()
+    hour, minute = (int(part) for part in run_time.split(":"))
+    candidate = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= current:
+        candidate += timedelta(days=1)
+    return candidate.isoformat()
+
+
+def save_schedule_configuration(body: dict[str, Any]) -> dict[str, Any]:
+    run_time = str(body.get("scheduleTime", "07:00"))
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", run_time):
+        raise ValueError("Choose a valid daily synchronization time.")
+    selected_ids = [int(item_id) for item_id in body.get("selectedIds", [])]
+    destinations = [str(value).strip() for value in body.get("destinations", []) if str(value).strip()]
+    source = parse_project_url(str(body.get("source", "")))
+    destination_refs = [parse_project_url(url) for url in destinations]
+    validate_project_direction(source, destination_refs)
+    if not selected_ids:
+        raise ValueError("Select at least one work item before saving the schedule.")
+    if not destination_refs:
+        raise ValueError("Add at least one destination before saving the schedule.")
+    if not load_os_credential():
+        raise ValueError("Save the PAT in Windows Credential Manager before enabling a schedule.")
+    config = {
+        "source": source.url,
+        "destinations": [item.url for item in destination_refs],
+        "selectedIds": selected_ids,
+        "fields": [str(value) for value in body.get("fields", [])],
+        "preserveRelationships": body.get("preserveRelationships") is True,
+        "scheduleTime": run_time,
+        "savedAt": datetime.now(timezone.utc).isoformat(),
+    }
+    install_daily_task(run_time)
+    temporary_path = f"{SCHEDULE_CONFIG_PATH}.tmp"
+    with open(temporary_path, "w", encoding="utf-8") as handle:
+        json.dump(config, handle, indent=2)
+    os.replace(temporary_path, SCHEDULE_CONFIG_PATH)
+    return config
+
+
+def append_schedule_log(message: str) -> None:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with open(SCHEDULE_LOG_PATH, "a", encoding="utf-8") as handle:
+        handle.write(f"{timestamp} {message}\n")
+
+
+def run_saved_schedule() -> bool:
+    config = load_schedule_configuration()
+    pat = load_os_credential()
+    if not config or not pat:
+        append_schedule_log("Scheduled synchronization skipped: configuration or saved PAT missing.")
+        return False
+    payload = dict(config)
+    payload.update({"liveWrites": True, "confirmation": "SYNC", "_scheduled": True})
+    with app.test_client() as client:
+        with client.session_transaction() as current_session:
+            vault_id = secrets.token_urlsafe(24)
+            current_session["vault_id"] = vault_id
+        PAT_VAULT.put(vault_id, pat)
+        try:
+            response = client.post("/api/sync", json=payload)
+            data = response.get_json(silent=True) or {}
+            append_schedule_log(
+                f"Scheduled synchronization HTTP {response.status_code}: "
+                f"{data.get('message', 'No result message')}"
+            )
+            return response.status_code == 200 and data.get("ok") is True
+        finally:
+            PAT_VAULT.remove(vault_id)
 
 
 @app.after_request
@@ -700,6 +945,48 @@ def credential_status():
     return jsonify({"stored": load_os_credential() is not None})
 
 
+@app.get("/api/schedule")
+def schedule_status():
+    config = load_schedule_configuration()
+    if not config:
+        return jsonify({"enabled": False, "storedCredential": load_os_credential() is not None})
+    with database() as db:
+        last_run = db.execute(
+            """SELECT completed_at, status FROM sync_runs WHERE mode='scheduled'
+               ORDER BY started_at DESC LIMIT 1"""
+        ).fetchone()
+    return jsonify({
+        "enabled": True,
+        "time": config.get("scheduleTime", "07:00"),
+        "selectedItems": len(config.get("selectedIds", [])),
+        "destinations": len(config.get("destinations", [])),
+        "nextRun": next_daily_run(str(config.get("scheduleTime", "07:00"))),
+        "lastRun": dict(last_run) if last_run else None,
+        "storedCredential": load_os_credential() is not None,
+    })
+
+
+@app.post("/api/schedule")
+def save_schedule():
+    try:
+        config = save_schedule_configuration(request.get_json(silent=True) or {})
+        return jsonify({
+            "ok": True,
+            "enabled": True,
+            "time": config["scheduleTime"],
+            "nextRun": next_daily_run(config["scheduleTime"]),
+            "message": f"Daily synchronization scheduled for {config['scheduleTime']}.",
+        })
+    except (ValueError, RuntimeError, OSError) as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@app.delete("/api/schedule")
+def delete_schedule():
+    remove_daily_task()
+    return jsonify({"ok": True, "enabled": False, "message": "Daily synchronization removed."})
+
+
 @app.post("/api/preview")
 def preview():
     body = request.get_json(silent=True) or {}
@@ -799,6 +1086,7 @@ def preview():
 @app.post("/api/sync")
 def sync():
     body = request.get_json(silent=True) or {}
+    run_mode = "scheduled" if body.get("_scheduled") is True else "live"
     try:
         selected_ids = [int(item_id) for item_id in body.get("selectedIds", [])]
     except (TypeError, ValueError):
@@ -833,8 +1121,8 @@ def sync():
         db.execute(
             """INSERT INTO sync_runs
                (run_id, started_at, mode, source_project, destinations, status)
-               VALUES (?, ?, 'live', ?, ?, 'running')""",
-            (run_id, started_at, source.project, len(destination_refs)),
+               VALUES (?, ?, ?, ?, ?, 'running')""",
+            (run_id, started_at, run_mode, source.project, len(destination_refs)),
         )
 
     entries: list[dict[str, Any]] = []
@@ -844,6 +1132,8 @@ def sync():
         destination_totals = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
         destination_warnings: list[str] = []
         comments_copied = 0
+        hyperlinks_added = 0
+        hyperlinks_removed = 0
         for item in source_items:
             source_id = int(item["id"])
             source_fields = item.get("fields", {})
@@ -899,6 +1189,13 @@ def sync():
                     destination_totals["updated"] += 1
                     totals["updated"] += 1
                 save_mapping(source, destination, item, destination_id)
+                if "Hyperlinks" in selected_fields and action == "Update":
+                    added_count, removed_count, hyperlink_errors = synchronize_hyperlinks(
+                        destination, pat, item, destination_id
+                    )
+                    hyperlinks_added += added_count
+                    hyperlinks_removed += removed_count
+                    destination_warnings.extend(hyperlink_errors)
                 if "Discussions" in selected_fields:
                     comment_count, comment_errors = synchronize_comments(
                         source, destination, pat, item, destination_id
@@ -919,9 +1216,10 @@ def sync():
                     "destination": destination.project, "destinationId": destination_id,
                     "action": action, "status": "Failed", "error": str(exc),
                 })
-        links_copied = 0
+        links_added = 0
+        links_removed = 0
         if body.get("preserveRelationships") is True:
-            links_copied, link_errors = synchronize_links(
+            links_added, links_removed, link_errors = synchronize_links(
                 source, destination, pat, source_items
             )
             destination_warnings.extend(link_errors)
@@ -931,8 +1229,11 @@ def sync():
                 "Completed" if destination_totals["failed"] == 0 and not destination_warnings
                 else "Completed with warnings or errors"
             ),
-            "links": links_copied,
+            "links": links_added,
+            "linksRemoved": links_removed,
             "comments": comments_copied,
+            "hyperlinksAdded": hyperlinks_added,
+            "hyperlinksRemoved": hyperlinks_removed,
             "warnings": destination_warnings,
             **destination_totals,
         })

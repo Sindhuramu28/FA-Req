@@ -6,16 +6,19 @@ A Python/Flask desktop app for one-way Azure DevOps work-item synchronization fr
 
 - Session-only PAT entry and live project-access validation
 - One source and addable destination projects
-- Work-item selection for Epics, Features, Requirements, Tasks, and other destination-supported types
+- Work-item selection for Epics, Features, Requirements, Tasks, Test Cases, and other destination-supported types
 - Field controls with State explicitly excluded
 - Safe preview followed by an explicit live-write switch and confirmation
 - Creates selected items in every destination and updates them on later runs
 - Local source-to-destination ID mappings in `%LOCALAPPDATA%\FA-Sync-Console\fa-sync.db`
 - Optional PAT storage in Windows Credential Manager; the PAT is never written to app files
-- Automatic `FA-Synced` destination tag, mapped work-item links, and optional discussions
+- Automatic `FA-Synced` destination tag, reconciled mapped work-item links, synchronized hyperlinks, and optional discussions
+- Optional daily synchronization through Windows Task Scheduler, using a PAT stored only in Windows Credential Manager
 - Per-item destination IDs and error reports
 
 Destination workflow state is never created from or updated to match the source. The destination project must support the source work-item type; otherwise that item is reported as failed without stopping the remaining items.
+
+Test Case work items support the selected common fields and Microsoft test steps. Test Plans, Test Suites, configurations, shared-step membership, and automated-test associations are outside the current work-item synchronization scope.
 
 ## Run locally
 
@@ -38,4 +41,10 @@ Use a PAT with **Work Items: Read & write** access to the source and every desti
 
 ## Live synchronization safety
 
-Preview is always read-only. A live run requires enabling **Activate** and accepting a separate confirmation. Selected fields are synchronized; Title remains mandatory when a new destination item is created. The `FA-Synced` tracking tag is always retained. Hyperlinks are copied during creation, and mapped Azure work-item links can be recreated. State is never included in Azure create or update requests.
+Preview is always read-only. A live run requires enabling **Activate** and accepting a separate confirmation. Selected fields are synchronized; Title remains mandatory when a new destination item is created. The `FA-Synced` tracking tag is always retained. Selected hyperlinks and mapped Azure work-item links are reconciled on later runs. State is never included in Azure create or update requests.
+
+## Daily scheduling
+
+Save the PAT in Windows Credential Manager, select the source items and destinations, choose a daily time, and select **Save schedule**. SyncWorkTrack registers a Windows Task Scheduler task that launches the same executable in background mode. The schedule configuration is stored under `%LOCALAPPDATA%\FA-Sync-Console`; it contains project URLs, selected work-item IDs, selected fields, and the run time, but never the PAT. Manual synchronization remains available at any time.
+
+Mapped Parent/Child, Affects/Affected By, and other Azure `System.LinkTypes.*` relationships are reconciled when **Copy mapped work-item links** is selected. SyncWorkTrack adds missing mapped links and removes obsolete links only when those links were previously created and tracked by SyncWorkTrack. Destination-owned links are left untouched.

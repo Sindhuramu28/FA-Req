@@ -71,6 +71,25 @@ async function post(url, payload = {}) {
   return data;
 }
 
+async function remove(url) {
+  const response = await fetch(url, {method: "DELETE"});
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.message || "The request could not be completed.");
+  return data;
+}
+
+function showScheduleStatus(data) {
+  const status = $("#scheduleStatus");
+  if (!data.enabled) {
+    status.textContent = "Not scheduled";
+    status.classList.remove("ready");
+    return;
+  }
+  if (data.time) $("#scheduleTime").value = data.time;
+  status.textContent = `Daily at ${data.time} · ${data.selectedItems ?? "saved"} items · ${data.destinations ?? "saved"} destinations`;
+  status.classList.add("ready");
+}
+
 async function loadSourceItems() {
   $("#scopeStatus").textContent = "Loading…";
   const data = await post("/api/work-items", {source: $("#source").value, marker: $("#faMarker").value});
@@ -105,6 +124,8 @@ async function init() {
     $("#rememberPat").checked = true;
     $("#pat").placeholder = "Saved credential available";
   }
+  const scheduleResponse = await fetch("/api/schedule");
+  showScheduleStatus(await scheduleResponse.json());
 }
 
 $("#destinationList").addEventListener("input", event => {
@@ -189,6 +210,20 @@ $("#runButton").addEventListener("click", async () => {
     $("#results").classList.remove("hidden"); $("#results").scrollIntoView({behavior:"smooth",block:"center"});
   } catch (error) { showToast(error.message, true); }
   finally { button.disabled = !$("#liveWrites").checked; button.textContent = "Synchronize"; }
+});
+$("#saveSchedule").addEventListener("click", async () => {
+  const button = $("#saveSchedule"); button.disabled = true;
+  try {
+    const payload = currentConfig(); payload.scheduleTime = $("#scheduleTime").value;
+    const data = await post("/api/schedule", payload);
+    showScheduleStatus({...data, selectedItems: payload.selectedIds.length, destinations: payload.destinations.length});
+    showToast(data.message);
+  } catch (error) { showToast(error.message, true); }
+  finally { button.disabled = false; }
+});
+$("#removeSchedule").addEventListener("click", async () => {
+  try { const data = await remove("/api/schedule"); showScheduleStatus(data); showToast(data.message); }
+  catch (error) { showToast(error.message, true); }
 });
 $("#closeResults").addEventListener("click", () => $("#results").classList.add("hidden"));
 init().catch(() => showToast("The app could not finish loading.", true));
