@@ -1,6 +1,7 @@
 const state = {
   items: [],
-  destinations: [""]
+  destinations: [""],
+  matchRows: []
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -115,6 +116,17 @@ function showPreview(data) {
   $("#results").scrollIntoView({behavior: "smooth", block: "center"});
 }
 
+function renderMatches(rows) {
+  state.matchRows = rows;
+  $("#matchRows").innerHTML = rows.map((row, index) => {
+    const source = `<strong>${row.sourceId} · ${escapeHtml(row.title)}</strong><small>${escapeHtml(row.type)}</small>`;
+    if (row.mappedDestinationId) return `<tr><td>${source}</td><td>${escapeHtml(row.destination)}</td><td><strong>${row.mappedDestinationId}</strong><small>Already linked</small></td><td>Up to date or changes to sync</td><td></td></tr>`;
+    if (!row.candidates.length) return `<tr><td>${source}</td><td>${escapeHtml(row.destination)}</td><td class="match-empty">No exact match</td><td>To create</td><td></td></tr>`;
+    const options = row.candidates.map(candidate => `<option value="${candidate.id}">${candidate.id} · ${escapeHtml(candidate.title)} · ${escapeHtml(candidate.state)}</option>`).join("");
+    return `<tr><td>${source}</td><td>${escapeHtml(row.destination)}</td><td><select data-candidate="${index}" aria-label="Existing match for source ${row.sourceId}">${options}</select></td><td><select data-mode="${index}" aria-label="Link mode for source ${row.sourceId}"><option value="sync">Link and sync</option><option value="aligned">Link only</option></select></td><td><input type="checkbox" data-link="${index}" checked aria-label="Link source ${row.sourceId}"></td></tr>`;
+  }).join("");
+}
+
 async function init() {
   renderDestinations();
   renderItems();
@@ -155,6 +167,16 @@ $("#selectAll").addEventListener("click", () => {
   state.items.forEach(item => item.selected = !allSelected);
   $("#selectAll").textContent = allSelected ? "Select all" : "Clear all";
   renderItems($("#searchItems").value);
+});
+$("#matchExisting").addEventListener("click", async () => {
+  const button = $("#matchExisting"); button.disabled = true; button.textContent = "Searching…";
+  try {
+    const data = await post("/api/matches", currentConfig());
+    renderMatches(data.rows);
+    $("#matchDialog").showModal();
+    showToast(data.message);
+  } catch (error) { showToast(error.message, true); }
+  finally { button.disabled = false; button.textContent = "Match existing"; }
 });
 $("#togglePat").addEventListener("click", () => {
   const input = $("#pat"); input.type = input.type === "password" ? "text" : "password";
@@ -225,5 +247,22 @@ $("#removeSchedule").addEventListener("click", async () => {
   try { const data = await remove("/api/schedule"); showScheduleStatus(data); showToast(data.message); }
   catch (error) { showToast(error.message, true); }
 });
+$("#saveMatches").addEventListener("click", async () => {
+  const choices = $$('[data-link]:checked').map(input => {
+    const index = Number(input.dataset.link); const row = state.matchRows[index];
+    return {
+      sourceId: row.sourceId,
+      destinationUrl: row.destinationUrl,
+      destinationId: Number($(`[data-candidate="${index}"]`).value),
+      mode: $(`[data-mode="${index}"]`).value,
+    };
+  });
+  try {
+    const data = await post("/api/mappings/link", {source: $("#source").value, choices});
+    $("#matchDialog").close(); showToast(data.message);
+  } catch (error) { showToast(error.message, true); }
+});
+$("#closeMatches").addEventListener("click", () => $("#matchDialog").close());
+$("#cancelMatches").addEventListener("click", () => $("#matchDialog").close());
 $("#closeResults").addEventListener("click", () => $("#results").classList.add("hidden"));
 init().catch(() => showToast("The app could not finish loading.", true));

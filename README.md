@@ -10,6 +10,7 @@ A Python/Flask desktop app for one-way Azure DevOps work-item synchronization fr
 - Field controls with State explicitly excluded
 - Safe preview followed by an explicit live-write switch and confirmation
 - Creates selected items in every destination and updates them on later runs
+- Exact Type + Title match discovery for linking pre-existing destination items without creating duplicates
 - Local source-to-destination ID mappings in `%LOCALAPPDATA%\FA-Sync-Console\fa-sync.db`
 - Optional PAT storage in Windows Credential Manager; the PAT is never written to app files
 - Automatic `FA-Synced` destination tag, reconciled mapped work-item links, synchronized hyperlinks, and optional discussions
@@ -48,3 +49,7 @@ Preview is always read-only. A live run requires enabling **Activate** and accep
 Save the PAT in Windows Credential Manager, select the source items and destinations, choose a daily time, and select **Save schedule**. SyncWorkTrack registers a Windows Task Scheduler task that launches the same executable in background mode. The schedule configuration is stored under `%LOCALAPPDATA%\FA-Sync-Console`; it contains project URLs, selected work-item IDs, selected fields, and the run time, but never the PAT. Manual synchronization remains available at any time.
 
 Mapped Parent/Child, Affects/Affected By, and other Azure `System.LinkTypes.*` relationships are reconciled when **Copy mapped work-item links** is selected. SyncWorkTrack adds missing mapped links and removes obsolete links only when those links were previously created and tracked by SyncWorkTrack. Destination-owned links are left untouched.
+
+## Existing destination items
+
+Select source items and choose **Match existing**. SyncWorkTrack searches each destination for exact work-item Type + Title matches and requires the user to confirm the destination ID. **Link and sync** stores the mapping and applies selected source fields on the next synchronization. **Link only** stores the current source revision as the baseline, so only later source changes synchronize. Neither option changes the destination State.

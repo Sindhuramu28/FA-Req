@@ -26,7 +26,7 @@
 
   <section class="panel" id="scope">
     <div class="section-heading"><div><span class="step">2</span><h2>Select source work items</h2></div><span class="section-status" id="scopeStatus">Not loaded</span></div>
-    <div class="toolbar"><label class="search"><span>⌕</span><input id="searchItems" type="search" placeholder="Search by ID, type, or title"></label><label class="compact-field">Selection<select id="faMarker"><option value="manual">All work items</option><option value="tag">Source tag: FA</option></select></label><button class="button ghost" id="selectAll">Select all</button></div>
+    <div class="toolbar"><label class="search"><span>⌕</span><input id="searchItems" type="search" placeholder="Search by ID, type, or title"></label><label class="compact-field">Selection<select id="faMarker"><option value="manual">All work items</option><option value="tag">Source tag: FA</option></select></label><button class="button ghost" id="selectAll">Select all</button><button class="button ghost" id="matchExisting">Match existing</button></div>
     <div class="table-wrap item-table-wrap"><table><thead><tr><th></th><th>ID</th><th>Type</th><th>Title</th><th>Source state</th><th>Children</th></tr></thead><tbody id="itemRows"></tbody></table></div>
   </section>
 
@@ -40,4 +40,4 @@
 
   <section class="result-panel hidden" id="results" aria-live="polite"><div class="result-head"><div><span class="success-mark">✓</span><div><h2 id="resultTitle">Preview complete</h2><p id="resultMessage"></p></div></div><button class="icon-button" id="closeResults">Close</button></div><div class="result-grid" id="resultGrid"></div><div class="change-details hidden" id="changeDetails"><h3>Work-item changes</h3><div class="table-wrap result-table-wrap"><table><thead><tr><th>Source ID</th><th>Title</th><th>Type</th><th>Destination</th><th>Destination ID</th><th>Action</th><th>Status</th></tr></thead><tbody id="changeRows"></tbody></table></div></div></section>
   <footer><span>SyncWorkTrack</span><span>PATs are session-only unless saved in Windows Credential Manager</span></footer>
-</main><div class="toast hidden" id="toast" role="status"></div><script src="{{ url_for('static', filename='app.js') }}"></script></body></html>
+</main><dialog id="matchDialog" class="match-dialog"><button class="dialog-close" id="closeMatches" type="button" aria-label="Close">×</button><h2>Match existing items</h2><div class="table-wrap match-table-wrap"><table><thead><tr><th>Source</th><th>Destination</th><th>Existing match</th><th>After linking</th><th></th></tr></thead><tbody id="matchRows"></tbody></table></div><div class="dialog-actions"><button class="button primary" id="saveMatches" type="button">Save mappings</button><button class="button ghost" id="cancelMatches" type="button">Cancel</button></div></dialog><div class="toast hidden" id="toast" role="status"></div><script src="{{ url_for('static', filename='app.js') }}"></script></body></html>

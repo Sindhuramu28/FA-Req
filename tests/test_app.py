@@ -94,6 +94,98 @@ class AppTests(unittest.TestCase):
         self.assertEqual(response.json["changes"][0]["action"], "Up to date")
         self.assertEqual(response.json["summary"]["upToDate"], 1)
 
+    @patch("app.fetch_work_items")
+    @patch("app.azure_request")
+    @patch("app.session_pat", return_value="read-pat")
+    def test_match_existing_finds_exact_type_and_title_only(
+        self, session_pat, azure_request, fetch_work_items
+    ):
+        source_item = {
+            "id": 12, "rev": 5,
+            "fields": {"System.Title": "Existing feature", "System.WorkItemType": "Feature"},
+            "relations": [],
+        }
+        destination_item = {
+            "id": 99, "rev": 3,
+            "fields": {
+                "System.Title": "Existing feature", "System.WorkItemType": "Feature",
+                "System.State": "Proposed",
+            },
+            "relations": [],
+        }
+        fetch_work_items.side_effect = [[source_item], [destination_item]]
+        azure_request.return_value = {"workItems": [{"id": 99}]}
+        response = self.client.post("/api/matches", json={
+            "source": "https://dev.azure.com/example/source",
+            "destinations": ["https://dev.azure.com/example/destination"],
+            "selectedIds": [12],
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["rows"][0]["candidates"][0]["id"], 99)
+        self.assertEqual(response.json["rows"][0]["candidates"][0]["state"], "Proposed")
+
+    @patch("app.fetch_work_items")
+    @patch("app.session_pat", return_value="read-pat")
+    def test_link_and_sync_stores_mapping_as_changes_to_sync(self, session_pat, fetch_work_items):
+        source_item = {
+            "id": 12, "rev": 5,
+            "fields": {"System.Title": "Existing feature", "System.WorkItemType": "Feature"},
+            "relations": [],
+        }
+        destination_item = {
+            "id": 99, "rev": 3,
+            "fields": {"System.Title": "Existing feature", "System.WorkItemType": "Feature"},
+            "relations": [],
+        }
+        fetch_work_items.side_effect = [[source_item], [destination_item]]
+        response = self.client.post("/api/mappings/link", json={
+            "source": "https://dev.azure.com/example/source",
+            "choices": [{
+                "sourceId": 12,
+                "destinationUrl": "https://dev.azure.com/example/destination",
+                "destinationId": 99,
+                "mode": "sync",
+            }],
+        })
+        self.assertEqual(response.status_code, 200)
+        preview = self.client.post("/api/preview", json={
+            "source": "https://dev.azure.com/example/source",
+            "selectedIds": [12],
+            "selectedItems": [{"id": 12, "title": "Existing feature", "type": "Feature", "rev": 5}],
+            "destinations": ["https://dev.azure.com/example/destination"],
+            "fields": ["Title"],
+        })
+        self.assertEqual(preview.json["changes"][0]["destinationId"], 99)
+        self.assertEqual(preview.json["changes"][0]["action"], "Changes to sync")
+
+    @patch("app.fetch_work_items")
+    @patch("app.session_pat", return_value="read-pat")
+    def test_link_only_marks_existing_item_up_to_date(self, session_pat, fetch_work_items):
+        item = {
+            "id": 12, "rev": 5,
+            "fields": {"System.Title": "Existing task", "System.WorkItemType": "Task"},
+            "relations": [],
+        }
+        destination_item = {
+            "id": 99, "rev": 2,
+            "fields": {"System.Title": "Existing task", "System.WorkItemType": "Task"},
+            "relations": [],
+        }
+        fetch_work_items.side_effect = [[item], [destination_item]]
+        response = self.client.post("/api/mappings/link", json={
+            "source": "https://dev.azure.com/example/source",
+            "choices": [{
+                "sourceId": 12,
+                "destinationUrl": "https://dev.azure.com/example/destination",
+                "destinationId": 99,
+                "mode": "aligned",
+            }],
+        })
+        self.assertEqual(response.status_code, 200)
+        with app_module.database() as db:
+            mapping = db.execute("SELECT last_source_revision FROM work_item_mappings").fetchone()
+        self.assertEqual(mapping["last_source_revision"], 5)
+
     def test_work_item_patch_never_copies_state(self):
         patch_document = work_item_patch({
             "fields": {

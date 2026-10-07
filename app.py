@@ -381,6 +381,99 @@ def fetch_work_items(ref: ProjectRef, pat: str, ids: list[int]) -> list[dict[str
     return records
 
 
+def find_exact_destination_matches(
+    source: ProjectRef,
+    destinations: list[ProjectRef],
+    pat: str,
+    source_ids: list[int],
+) -> list[dict[str, Any]]:
+    source_items = fetch_work_items(source, pat, source_ids)
+    source_by_id = {int(item["id"]): item for item in source_items}
+    rows: list[dict[str, Any]] = []
+    for destination in destinations:
+        with database() as db:
+            placeholders = ",".join("?" for _ in source_ids)
+            mapping_rows = db.execute(
+                f"""SELECT source_id, destination_id FROM work_item_mappings
+                    WHERE source_organization=? AND source_project=?
+                    AND destination_organization=? AND destination_project=?
+                    AND source_id IN ({placeholders})""",
+                (source.organization, source.project, destination.organization,
+                 destination.project, *source_ids),
+            ).fetchall()
+            assigned_rows = db.execute(
+                """SELECT destination_id FROM work_item_mappings
+                   WHERE source_organization=? AND source_project=?
+                   AND destination_organization=? AND destination_project=?""",
+                (source.organization, source.project, destination.organization,
+                 destination.project),
+            ).fetchall()
+        mapped = {int(row["source_id"]): int(row["destination_id"]) for row in mapping_rows}
+        assigned_ids = {int(row["destination_id"]) for row in assigned_rows}
+        unmatched = [item for item_id, item in source_by_id.items() if item_id not in mapped]
+        candidate_items: list[dict[str, Any]] = []
+        if unmatched:
+            pairs = {
+                (
+                    str(item.get("fields", {}).get("System.WorkItemType", "")),
+                    str(item.get("fields", {}).get("System.Title", "")),
+                )
+                for item in unmatched
+            }
+            clauses = [
+                "([System.WorkItemType] = '" + wiql_escape(item_type) + "' AND "
+                "[System.Title] = '" + wiql_escape(title) + "')"
+                for item_type, title in pairs if item_type and title
+            ]
+            if clauses:
+                query = (
+                    "SELECT [System.Id] FROM WorkItems WHERE "
+                    f"[System.TeamProject] = '{wiql_escape(destination.project)}' AND ("
+                    + " OR ".join(clauses) + ") ORDER BY [System.Id]"
+                )
+                result = azure_request(
+                    destination, pat,
+                    "_apis/wit/wiql?$top=1000&api-version=7.1",
+                    method="POST", payload={"query": query}, project_scoped=False,
+                )
+                candidate_ids = [
+                    int(item["id"]) for item in result.get("workItems", [])
+                    if int(item["id"]) not in assigned_ids
+                ]
+                if candidate_ids:
+                    candidate_items = fetch_work_items(destination, pat, candidate_ids)
+        for source_id in source_ids:
+            source_item = source_by_id.get(source_id)
+            if not source_item:
+                continue
+            fields = source_item.get("fields", {})
+            item_type = str(fields.get("System.WorkItemType", "Unknown"))
+            title = str(fields.get("System.Title", "Untitled"))
+            matches = [
+                {
+                    "id": int(candidate["id"]),
+                    "title": str(candidate.get("fields", {}).get("System.Title", "Untitled")),
+                    "type": str(candidate.get("fields", {}).get("System.WorkItemType", "Unknown")),
+                    "state": str(candidate.get("fields", {}).get("System.State", "")),
+                }
+                for candidate in candidate_items
+                if str(candidate.get("fields", {}).get("System.WorkItemType", "")).casefold()
+                == item_type.casefold()
+                and str(candidate.get("fields", {}).get("System.Title", "")).casefold()
+                == title.casefold()
+            ]
+            rows.append({
+                "sourceId": source_id,
+                "title": title,
+                "type": item_type,
+                "destination": destination.project,
+                "destinationUrl": destination.url,
+                "mappedDestinationId": mapped.get(source_id),
+                "candidates": matches,
+            })
+    return rows
+
+
 FIELD_MAP = {
     "Title": "System.Title",
     "Description": "System.Description",
@@ -456,6 +549,8 @@ def save_mapping(
     destination: ProjectRef,
     source_item: dict[str, Any],
     destination_id: int,
+    *,
+    mark_current: bool = True,
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
     fields = source_item.get("fields", {})
@@ -476,7 +571,8 @@ def save_mapping(
                           status='active', last_error=NULL""",
             (source.organization, source.project, int(source_item["id"]),
              destination.organization, destination.project, destination_id,
-             fields.get("System.WorkItemType", "Unknown"), source_item.get("rev"),
+             fields.get("System.WorkItemType", "Unknown"),
+             source_item.get("rev") if mark_current else None,
              now, now),
         )
 
@@ -985,6 +1081,103 @@ def save_schedule():
 def delete_schedule():
     remove_daily_task()
     return jsonify({"ok": True, "enabled": False, "message": "Daily synchronization removed."})
+
+
+@app.post("/api/matches")
+def existing_matches():
+    body = request.get_json(silent=True) or {}
+    try:
+        selected_ids = [int(item_id) for item_id in body.get("selectedIds", [])]
+        if not selected_ids:
+            raise ValueError("Select at least one source work item.")
+        pat = session_pat()
+        source = parse_project_url(str(body.get("source", "")))
+        destinations = [
+            parse_project_url(str(url)) for url in body.get("destinations", [])
+            if str(url).strip()
+        ]
+        if not destinations:
+            raise ValueError("Add at least one destination project.")
+        validate_project_direction(source, destinations)
+        rows = find_exact_destination_matches(source, destinations, pat, selected_ids)
+        possible = sum(1 for row in rows if row["candidates"])
+        mapped = sum(1 for row in rows if row["mappedDestinationId"] is not None)
+        return jsonify({
+            "ok": True,
+            "rows": rows,
+            "message": f"Found possible matches for {possible} item-destination pairs; {mapped} are already linked.",
+        })
+    except (ValueError, PermissionError, ConnectionError, RuntimeError) as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@app.post("/api/mappings/link")
+def link_existing_items():
+    body = request.get_json(silent=True) or {}
+    choices = body.get("choices", [])
+    if not choices:
+        return jsonify({"ok": False, "message": "Choose at least one destination match."}), 400
+    try:
+        pat = session_pat()
+        source = parse_project_url(str(body.get("source", "")))
+        source_ids = sorted({int(choice["sourceId"]) for choice in choices})
+        source_items = fetch_work_items(source, pat, source_ids)
+        source_by_id = {int(item["id"]): item for item in source_items}
+        linked = 0
+        for choice in choices:
+            source_id = int(choice["sourceId"])
+            destination_id = int(choice["destinationId"])
+            mode = str(choice.get("mode", "sync"))
+            if mode not in {"sync", "aligned"}:
+                raise ValueError("Choose Link and sync or Link only.")
+            source_item = source_by_id.get(source_id)
+            if not source_item:
+                raise ValueError(f"Source work item {source_id} could not be loaded.")
+            destination = parse_project_url(str(choice.get("destinationUrl", "")))
+            validate_project_direction(source, [destination])
+            destination_items = fetch_work_items(destination, pat, [destination_id])
+            if not destination_items:
+                raise ValueError(
+                    f"Destination work item {destination_id} could not be loaded from {destination.project}."
+                )
+            destination_item = destination_items[0]
+            source_fields = source_item.get("fields", {})
+            destination_fields = destination_item.get("fields", {})
+            same_title = str(source_fields.get("System.Title", "")).casefold() == str(
+                destination_fields.get("System.Title", "")
+            ).casefold()
+            same_type = str(source_fields.get("System.WorkItemType", "")).casefold() == str(
+                destination_fields.get("System.WorkItemType", "")
+            ).casefold()
+            if not same_title or not same_type:
+                raise ValueError(
+                    f"Destination work item {destination_id} no longer exactly matches the source title and type."
+                )
+            with database() as db:
+                assigned = db.execute(
+                    """SELECT source_id FROM work_item_mappings
+                       WHERE source_organization=? AND source_project=?
+                       AND destination_organization=? AND destination_project=?
+                       AND destination_id=? AND source_id<>?""",
+                    (source.organization, source.project, destination.organization,
+                     destination.project, destination_id, source_id),
+                ).fetchone()
+            if assigned:
+                raise ValueError(
+                    f"Destination work item {destination_id} is already linked to source {assigned['source_id']}."
+                )
+            save_mapping(
+                source, destination, source_item, destination_id,
+                mark_current=mode == "aligned",
+            )
+            linked += 1
+        return jsonify({
+            "ok": True,
+            "linked": linked,
+            "message": f"Linked {linked} existing destination item mappings.",
+        })
+    except (KeyError, TypeError, ValueError, PermissionError, ConnectionError, RuntimeError) as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
 
 
 @app.post("/api/preview")
