@@ -459,6 +459,44 @@ class AppTests(unittest.TestCase):
         self.assertFalse(azure_request.call_args_list[0].kwargs["project_scoped"])
         self.assertEqual(items[0]["type"], "Task")
 
+    @patch("app.azure_request")
+    def test_work_item_type_filter_is_added_to_live_query(self, azure_request):
+        azure_request.return_value = {"workItems": []}
+        ref = parse_project_url("https://dev.azure.com/example/source")
+        self.assertEqual(load_source_work_items(ref, "test-pat", "type:Test Case"), [])
+        query = azure_request.call_args.kwargs["payload"]["query"]
+        self.assertIn("[System.WorkItemType] = 'Test Case'", query)
+
+    def test_export_latest_sync_log_contains_item_change_rows(self):
+        with app_module.database() as db:
+            db.execute(
+                """INSERT INTO sync_runs
+                   (run_id, started_at, completed_at, mode, source_project,
+                    destinations, created_count, updated_count, skipped_count,
+                    failed_count, status)
+                   VALUES ('SYNC-TEST', 'start', 'finish', 'live', 'source',
+                           1, 1, 0, 0, 0, 'completed')"""
+            )
+            db.execute(
+                """INSERT INTO sync_run_items
+                   (run_id, source_id, title, work_item_type, destination,
+                    destination_id, action, status, error)
+                   VALUES ('SYNC-TEST', 12, 'Feature title', 'Feature',
+                           'destination', 99, 'Created', 'Success', '')"""
+            )
+        response = self.client.get("/api/export/latest")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("attachment", response.headers["Content-Disposition"])
+        exported = response.data.decode("utf-8-sig")
+        self.assertIn("SYNC-TEST", exported)
+        self.assertIn("Feature title", exported)
+        self.assertIn("destination", exported)
+
+    def test_export_latest_sync_log_reports_when_no_run_exists(self):
+        response = self.client.get("/api/export/latest")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("No completed", response.json["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

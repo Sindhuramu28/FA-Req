@@ -16,6 +16,8 @@ A Python/Flask desktop app for one-way Azure DevOps work-item synchronization fr
 - Automatic `FA-Synced` destination tag, reconciled mapped work-item links, synchronized hyperlinks and attachments, and optional discussions
 - Optional daily synchronization through Windows Task Scheduler, using a PAT stored only in Windows Credential Manager
 - Per-item destination IDs and error reports
+- Persistent per-item synchronization logs with one-click CSV export for the most recent run
+- Source filtering by FA tag or work-item type, including Epic, Feature, Requirement, Task, and Test Case
 
 Destination workflow state is never created from or updated to match the source. The destination project must support the source work-item type; otherwise that item is reported as failed without stopping the remaining items.
 

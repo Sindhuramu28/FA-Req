@@ -233,6 +233,26 @@ $("#runButton").addEventListener("click", async () => {
   } catch (error) { showToast(error.message, true); }
   finally { button.disabled = !$("#liveWrites").checked; button.textContent = "Synchronize"; }
 });
+$("#exportLog").addEventListener("click", async () => {
+  const button = $("#exportLog"); button.disabled = true; button.textContent = "Exporting…";
+  try {
+    const response = await fetch("/api/export/latest");
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.message || "The synchronization log could not be exported.");
+    }
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="([^"]+)"/i);
+    const blobUrl = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = match ? match[1] : "SyncWorkTrack-latest.csv";
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    showToast("The most recent synchronization log was exported.");
+  } catch (error) { showToast(error.message, true); }
+  finally { button.disabled = false; button.textContent = "Export log"; }
+});
 $("#saveSchedule").addEventListener("click", async () => {
   const button = $("#saveSchedule"); button.disabled = true;
   try {

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import csv
 import ctypes
 from ctypes import wintypes
 import json
+import io
 import os
 import re
 import secrets
@@ -21,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
-from flask import Flask, jsonify, render_template, request, session
+from flask import Flask, Response, jsonify, render_template, request, session
 
 
 def bundled_path(folder: str) -> str:
@@ -195,6 +197,18 @@ def initialize_database() -> None:
                 skipped_count INTEGER NOT NULL DEFAULT 0,
                 failed_count INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sync_run_items (
+                run_id TEXT NOT NULL,
+                source_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                work_item_type TEXT NOT NULL,
+                destination TEXT NOT NULL,
+                destination_id INTEGER,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (run_id) REFERENCES sync_runs(run_id)
             );
             CREATE TABLE IF NOT EXISTS synced_comments (
                 source_organization TEXT NOT NULL,
@@ -410,6 +424,15 @@ def load_source_work_items(ref: ProjectRef, pat: str, marker: str) -> list[dict[
     conditions: list[str] = [f"[System.TeamProject] = '{project_name}'"]
     if marker == "tag":
         conditions.append("[System.Tags] CONTAINS 'FA'")
+    elif marker.startswith("type:"):
+        work_item_type = marker.removeprefix("type:")
+        allowed_types = {
+            "Epic", "Feature", "Requirement", "Task", "Test Case",
+            "User Story", "Product Backlog Item", "Bug", "Issue",
+        }
+        if work_item_type not in allowed_types:
+            raise ValueError("Choose a supported work-item type filter.")
+        conditions.append(f"[System.WorkItemType] = '{wiql_escape(work_item_type)}'")
     query = (
         "SELECT [System.Id] FROM WorkItems WHERE "
         + " AND ".join(conditions)
@@ -1157,10 +1180,10 @@ def work_items():
     try:
         ref = parse_project_url(str(body.get("source", "")))
         marker = str(body.get("marker", "tag"))
-        if marker not in {"tag", "manual"}:
+        if marker not in {"tag", "manual"} and not marker.startswith("type:"):
             return jsonify({
                 "ok": False,
-                "message": "The first live version supports Tag: FA or Manual selection.",
+                "message": "Choose All work items, Source tag: FA, or a work-item type.",
             }), 400
         items = load_source_work_items(ref, session_pat(), marker)
         if not items:
@@ -1667,6 +1690,20 @@ def sync():
             (completed_at, totals["created"], totals["updated"], totals["skipped"],
              totals["failed"], run_status, run_id),
         )
+        db.executemany(
+            """INSERT INTO sync_run_items
+               (run_id, source_id, title, work_item_type, destination,
+                destination_id, action, status, error)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    run_id, row["sourceId"], row["title"], row["type"],
+                    row["destination"], row.get("destinationId"), row["action"],
+                    row["status"], row.get("error", ""),
+                )
+                for row in results
+            ],
+        )
     return jsonify({
         "ok": True,
         "runId": run_id,
@@ -1679,6 +1716,65 @@ def sync():
             f"{totals['failed']} failed. Destination states were not changed."
         ),
     })
+
+
+@app.get("/api/export/latest")
+def export_latest_sync_log():
+    with database() as db:
+        run = db.execute(
+            """SELECT run_id, started_at, completed_at, mode, source_project,
+                      destinations, created_count, updated_count, skipped_count,
+                      failed_count, status
+               FROM sync_runs WHERE completed_at IS NOT NULL
+               ORDER BY completed_at DESC LIMIT 1"""
+        ).fetchone()
+        if run is None:
+            return jsonify({
+                "ok": False,
+                "message": "No completed synchronization log is available yet.",
+            }), 404
+        rows = db.execute(
+            """SELECT source_id, title, work_item_type, destination,
+                      destination_id, action, status, error
+               FROM sync_run_items WHERE run_id=?
+               ORDER BY destination, source_id""",
+            (run["run_id"],),
+        ).fetchall()
+    def spreadsheet_safe(value: Any) -> Any:
+        if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+            return "'" + value
+        return value
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(["SyncWorkTrack recent synchronization log"])
+    writer.writerow(["Run ID", run["run_id"]])
+    writer.writerow(["Started UTC", run["started_at"]])
+    writer.writerow(["Completed UTC", run["completed_at"]])
+    writer.writerow(["Mode", run["mode"]])
+    writer.writerow(["Source project", run["source_project"]])
+    writer.writerow(["Destinations", run["destinations"]])
+    writer.writerow(["Created", run["created_count"]])
+    writer.writerow(["Updated", run["updated_count"]])
+    writer.writerow(["Up to date", run["skipped_count"]])
+    writer.writerow(["Failed", run["failed_count"]])
+    writer.writerow([])
+    writer.writerow([
+        "Source ID", "Title", "Type", "Destination", "Destination ID",
+        "Action", "Status", "Error",
+    ])
+    for row in rows:
+        writer.writerow([spreadsheet_safe(value) for value in [
+            row["source_id"], row["title"], row["work_item_type"],
+            row["destination"], row["destination_id"] or "", row["action"],
+            row["status"], row["error"],
+        ]])
+    filename = f"SyncWorkTrack-{run['run_id']}.csv"
+    return Response(
+        "\ufeff" + output.getvalue(),
+        mimetype="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/health")
