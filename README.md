@@ -38,9 +38,7 @@ Open `http://127.0.0.1:5000`.
 
 The packaged `SyncWorkTrack.exe` opens as a desktop application. It does not show a console, browser address, or local IP. Closing the desktop window stops the application and clears the session PAT unless the user explicitly saved it in Windows Credential Manager.
 
-`testsyncapp.exe` is a separate UI prototype. It displays disabled, type-specific field choices when Epic, Feature, Requirement, Task, or Test Case is selected. These prototype choices are intentionally visual-only and are never included in Azure synchronization requests. The regular `SyncWorkTrack.exe` does not display this section.
-
-**Export log** creates `%USERPROFILE%\Downloads\SyncWorkTrack Exported Logs` when needed, saves the most recent completed synchronization there as `SyncWorkTrack-SYNC-....csv`, and displays the full saved path. Preview-only results are not exported. The CSV contains run metadata and one row per source/destination item with IDs, title, type, action, status, and error details; it never contains the PAT.
+**Export log** creates an `Exported Logs` folder beside `SyncWorkTrack.exe` when needed, saves the most recent completed synchronization there as `SyncWorkTrack-SYNC-....csv`, and displays the full saved path. In this repository build, that location is `dist\Exported Logs`. Preview-only results are not exported. The CSV contains run metadata and one row per source/destination item with IDs, title, type, action, status, and error details; it never contains the PAT.
 
 ## PAT handling
 

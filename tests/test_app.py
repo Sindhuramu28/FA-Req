@@ -39,24 +39,12 @@ class AppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["status"], "ok")
 
-    def test_standard_app_hides_type_specific_field_prototype(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("SYNCWORKTRACK_FIELD_PROTOTYPE", None)
-            response = self.client.get("/")
-        self.assertNotIn(b"Type-specific fields", response.data)
+    def test_standard_app_has_requested_work_item_filters(self):
+        response = self.client.get("/")
         self.assertIn(b'value="type:Task"', response.data)
         self.assertIn(b'value="type:Test Case"', response.data)
         self.assertNotIn(b'value="type:Bug"', response.data)
         self.assertNotIn(b'value="type:Issue"', response.data)
-
-    def test_test_app_shows_disabled_type_specific_fields(self):
-        with patch.dict(os.environ, {"SYNCWORKTRACK_FIELD_PROTOTYPE": "1"}):
-            response = self.client.get("/")
-        self.assertIn(b"Type-specific fields", response.data)
-        self.assertIn(b"Customer requirement", response.data)
-        self.assertIn(b"System requirement", response.data)
-        self.assertIn(b"TestSyncApp", response.data)
-        self.assertIn(b'<fieldset class="type-fields" disabled>', response.data)
 
     def test_preview_requires_items(self):
         response = self.client.post("/api/preview", json={"selectedIds": [], "destinations": ["x"]})
@@ -612,16 +600,12 @@ class AppTests(unittest.TestCase):
         self.assertIn("SYNC-TEST", exported)
         self.assertIn("Feature title", exported)
         self.assertIn("destination", exported)
-        with patch("app.os.path.expanduser", return_value=self.temp_directory.name):
+        export_folder = os.path.join(self.temp_directory.name, "Exported Logs")
+        with patch("app.export_log_directory", return_value=export_folder):
             saved = self.client.post("/api/export/latest/save", json={})
         self.assertEqual(saved.status_code, 200)
         self.assertTrue(os.path.isfile(saved.json["path"]))
-        self.assertIn(
-            os.path.join(
-                self.temp_directory.name, "Downloads", "SyncWorkTrack Exported Logs"
-            ),
-            saved.json["path"],
-        )
+        self.assertIn(export_folder, saved.json["path"])
 
     def test_export_latest_sync_log_reports_when_no_run_exists(self):
         response = self.client.get("/api/export/latest")

@@ -1280,12 +1280,7 @@ def secure_headers(response):
 
 @app.get("/")
 def index():
-    prototype = os.environ.get("SYNCWORKTRACK_FIELD_PROTOTYPE") == "1"
-    return render_template(
-        "index.html",
-        test_field_prototype=prototype,
-        app_name="TestSyncApp" if prototype else "SyncWorkTrack",
-    )
+    return render_template("index.html")
 
 
 @app.post("/api/work-items")
@@ -1923,6 +1918,15 @@ def latest_sync_csv() -> tuple[str, str]:
     return filename, "\ufeff" + output.getvalue()
 
 
+def export_log_directory() -> str:
+    application_folder = (
+        os.path.dirname(sys.executable)
+        if getattr(sys, "frozen", False)
+        else os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
+    )
+    return os.path.join(application_folder, "Exported Logs")
+
+
 @app.get("/api/export/latest")
 def export_latest_sync_log():
     try:
@@ -1940,9 +1944,7 @@ def export_latest_sync_log():
 def save_latest_sync_log():
     try:
         filename, content = latest_sync_csv()
-        export_folder = os.path.join(
-            os.path.expanduser("~"), "Downloads", "SyncWorkTrack Exported Logs"
-        )
+        export_folder = export_log_directory()
         os.makedirs(export_folder, exist_ok=True)
         path = os.path.join(export_folder, filename)
         with open(path, "w", encoding="utf-8", newline="") as handle:
