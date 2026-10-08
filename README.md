@@ -58,6 +58,8 @@ Save the PAT in Windows Credential Manager, select the source items and destinat
 
 Mapped Parent/Child, Affects/Affected By, and other Azure `System.LinkTypes.*` relationships are reconciled when **Copy mapped work-item links** is selected. SyncWorkTrack adds missing mapped links and removes obsolete links only when those links were previously created and tracked by SyncWorkTrack. Destination-owned links are left untouched.
 
+When **Include linked child items** is selected, choosing a source Epic, Feature, or Requirement recursively includes supported descendants connected through Azure Parent/Child links. Preview labels these rows as **Included child**. The traversal is limited to Epic, Feature, Requirement, Task, and Test Case items in the configured source project and stops at 500 items for safety. The included items are created or updated before their mapped Parent/Child relationships are reconciled.
+
 ## Existing destination items
 
 Select source items and choose **Match existing**. SyncWorkTrack searches each destination for exact work-item Type + Title matches and requires the user to confirm the destination ID. **Link and sync** stores the mapping and applies selected source fields on the next synchronization. **Link only** stores the current source revision as the baseline, so only later source changes synchronize. Neither option changes the destination State.

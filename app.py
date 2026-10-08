@@ -484,6 +484,51 @@ def fetch_work_items(ref: ProjectRef, pat: str, ids: list[int]) -> list[dict[str
     return records
 
 
+def expand_child_hierarchy(
+    ref: ProjectRef, pat: str, root_ids: list[int], limit: int = 500
+) -> list[dict[str, Any]]:
+    """Load selected roots and supported descendants linked as Azure children."""
+    allowed_types = {"Epic", "Feature", "Requirement", "Task", "Test Case"}
+    pending = list(dict.fromkeys(int(item_id) for item_id in root_ids))
+    discovered: dict[int, dict[str, Any]] = {}
+    while pending:
+        batch = pending[:200]
+        del pending[:200]
+        items = fetch_work_items(ref, pat, batch)
+        returned_ids = {int(item["id"]) for item in items}
+        missing_roots = [item_id for item_id in batch if item_id not in returned_ids]
+        if missing_roots and any(item_id in root_ids for item_id in missing_roots):
+            raise ValueError(
+                "Source work items could not be loaded: "
+                + ", ".join(str(item_id) for item_id in missing_roots)
+                + "."
+            )
+        for item in items:
+            item_id = int(item["id"])
+            fields = item.get("fields", {})
+            project = str(fields.get("System.TeamProject", ""))
+            item_type = str(fields.get("System.WorkItemType", ""))
+            if project and project.casefold() != ref.project.casefold():
+                continue
+            if item_type not in allowed_types:
+                continue
+            if item_id in discovered:
+                continue
+            discovered[item_id] = item
+            if len(discovered) > limit:
+                raise ValueError(
+                    f"The selected hierarchy exceeds the {limit}-item safety limit. "
+                    "Select a smaller branch."
+                )
+            for relation in item.get("relations", []):
+                if relation.get("rel") != "System.LinkTypes.Hierarchy-Forward":
+                    continue
+                child_id = related_work_item_id(str(relation.get("url", "")))
+                if child_id is not None and child_id not in discovered and child_id not in pending:
+                    pending.append(child_id)
+    return list(discovered.values())
+
+
 def find_exact_destination_matches(
     source: ProjectRef,
     destinations: list[ProjectRef],
@@ -1117,6 +1162,7 @@ def save_schedule_configuration(body: dict[str, Any]) -> dict[str, Any]:
         "selectedIds": selected_ids,
         "fields": [str(value) for value in body.get("fields", [])],
         "preserveRelationships": body.get("preserveRelationships") is True,
+        "includeChildren": body.get("includeChildren") is True,
         "scheduleTime": run_time,
         "savedAt": datetime.now(timezone.utc).isoformat(),
     }
@@ -1326,6 +1372,9 @@ def existing_matches():
         if not destinations:
             raise ValueError("Add at least one destination project.")
         validate_project_direction(source, destinations)
+        if body.get("includeChildren") is True:
+            hierarchy = expand_child_hierarchy(source, pat, selected_ids)
+            selected_ids = [int(item["id"]) for item in hierarchy]
         rows = find_exact_destination_matches(source, destinations, pat, selected_ids)
         possible = sum(1 for row in rows if row["candidates"])
         mapped = sum(1 for row in rows if row["mappedDestinationId"] is not None)
@@ -1425,6 +1474,22 @@ def preview():
         validate_project_direction(source, destination_refs)
     except ValueError as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
+    root_ids = {int(item_id) for item_id in selected_ids}
+    if body.get("includeChildren") is True:
+        try:
+            hierarchy = expand_child_hierarchy(source, session_pat(), list(root_ids))
+        except (ValueError, PermissionError, ConnectionError, RuntimeError) as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 400
+        selected_ids = [int(item["id"]) for item in hierarchy]
+        selected_items = [
+            {
+                "id": item["id"],
+                "title": item.get("fields", {}).get("System.Title", "Untitled"),
+                "type": item.get("fields", {}).get("System.WorkItemType", "Unknown"),
+                "rev": item.get("rev"),
+            }
+            for item in hierarchy
+        ]
     item_details = {
         int(item.get("id")): {
             "title": str(item.get("title", "Untitled")),
@@ -1482,6 +1547,7 @@ def preview():
                     "destination": destination.project,
                     "destinationId": destination_id,
                     "action": action,
+                    "status": "Included child" if numeric_id not in root_ids else "Planned",
                 })
     total_pairs = len(selected_ids) * len(destination_refs)
     create_count = total_pairs - mapped_pairs
@@ -1529,9 +1595,15 @@ def sync():
         source = parse_project_url(str(body.get("source", "")))
         destination_refs = [parse_project_url(str(url)) for url in destinations]
         validate_project_direction(source, destination_refs)
-        source_items = fetch_work_items(source, pat, selected_ids)
+        requested_ids = list(selected_ids)
+        source_items = (
+            expand_child_hierarchy(source, pat, requested_ids)
+            if body.get("includeChildren") is True
+            else fetch_work_items(source, pat, requested_ids)
+        )
+        selected_ids = [int(item["id"]) for item in source_items]
         found_ids = {int(item["id"]) for item in source_items}
-        missing_ids = sorted(set(selected_ids) - found_ids)
+        missing_ids = sorted(set(requested_ids) - found_ids)
         if missing_ids:
             raise ValueError(f"Source work items could not be loaded: {', '.join(map(str, missing_ids))}.")
     except (ValueError, PermissionError, ConnectionError, RuntimeError) as exc:

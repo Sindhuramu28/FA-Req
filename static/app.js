@@ -77,6 +77,7 @@ function currentConfig() {
     selectedItems: selectedItems.map(item => ({id: item.id, title: item.title, type: item.type, rev: item.rev})),
     fields: $$("#fieldList input:checked").map(input => input.value),
     preserveRelationships: $("#relations").checked,
+    includeChildren: $("#includeChildren").checked,
     liveWrites: $("#liveWrites").checked
   };
 }
