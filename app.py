@@ -529,6 +529,69 @@ def expand_child_hierarchy(
     return list(discovered.values())
 
 
+def is_affects_relation(relation: dict[str, Any]) -> bool:
+    reference_name = str(relation.get("rel", "")).casefold()
+    display_name = str(relation.get("attributes", {}).get("name", "")).casefold()
+    return "affect" in reference_name or display_name in {"affects", "affected by"}
+
+
+def expand_work_item_selection(
+    ref: ProjectRef,
+    pat: str,
+    root_ids: list[int],
+    *,
+    include_children: bool,
+    include_affected: bool,
+    limit: int = 500,
+) -> tuple[list[dict[str, Any]], set[int], set[int]]:
+    roots = {int(item_id) for item_id in root_ids}
+    items = (
+        expand_child_hierarchy(ref, pat, list(roots), limit)
+        if include_children
+        else fetch_work_items(ref, pat, list(roots))
+    )
+    found_roots = {int(item["id"]) for item in items} & roots
+    missing_roots = sorted(roots - found_roots)
+    if missing_roots:
+        raise ValueError(
+            "Source work items could not be loaded: "
+            + ", ".join(str(item_id) for item_id in missing_roots)
+            + "."
+        )
+    child_ids = {int(item["id"]) for item in items} - roots
+    affected_ids: set[int] = set()
+    if include_affected:
+        known_ids = {int(item["id"]) for item in items}
+        related_ids = {
+            target_id
+            for item in items
+            for relation in item.get("relations", [])
+            if is_affects_relation(relation)
+            if (target_id := related_work_item_id(str(relation.get("url", "")))) is not None
+            and target_id not in known_ids
+        }
+        if len(known_ids) + len(related_ids) > limit:
+            raise ValueError(
+                f"The selected hierarchy and affected items exceed the {limit}-item safety limit. "
+                "Select a smaller branch."
+            )
+        allowed_types = {"Epic", "Feature", "Requirement", "Task", "Test Case"}
+        for related in fetch_work_items(ref, pat, sorted(related_ids)):
+            fields = related.get("fields", {})
+            project = str(fields.get("System.TeamProject", ""))
+            item_type = str(fields.get("System.WorkItemType", ""))
+            if project and project.casefold() != ref.project.casefold():
+                continue
+            if item_type not in allowed_types:
+                continue
+            related_id = int(related["id"])
+            if related_id not in known_ids:
+                items.append(related)
+                known_ids.add(related_id)
+                affected_ids.add(related_id)
+    return items, child_ids, affected_ids
+
+
 def find_exact_destination_matches(
     source: ProjectRef,
     destinations: list[ProjectRef],
@@ -1163,6 +1226,7 @@ def save_schedule_configuration(body: dict[str, Any]) -> dict[str, Any]:
         "fields": [str(value) for value in body.get("fields", [])],
         "preserveRelationships": body.get("preserveRelationships") is True,
         "includeChildren": body.get("includeChildren") is True,
+        "includeAffected": body.get("includeAffected") is True,
         "scheduleTime": run_time,
         "savedAt": datetime.now(timezone.utc).isoformat(),
     }
@@ -1372,9 +1436,13 @@ def existing_matches():
         if not destinations:
             raise ValueError("Add at least one destination project.")
         validate_project_direction(source, destinations)
-        if body.get("includeChildren") is True:
-            hierarchy = expand_child_hierarchy(source, pat, selected_ids)
-            selected_ids = [int(item["id"]) for item in hierarchy]
+        if body.get("includeChildren") is True or body.get("includeAffected") is True:
+            expanded, _, _ = expand_work_item_selection(
+                source, pat, selected_ids,
+                include_children=body.get("includeChildren") is True,
+                include_affected=body.get("includeAffected") is True,
+            )
+            selected_ids = [int(item["id"]) for item in expanded]
         rows = find_exact_destination_matches(source, destinations, pat, selected_ids)
         possible = sum(1 for row in rows if row["candidates"])
         mapped = sum(1 for row in rows if row["mappedDestinationId"] is not None)
@@ -1475,9 +1543,15 @@ def preview():
     except ValueError as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
     root_ids = {int(item_id) for item_id in selected_ids}
-    if body.get("includeChildren") is True:
+    included_child_ids: set[int] = set()
+    included_affected_ids: set[int] = set()
+    if body.get("includeChildren") is True or body.get("includeAffected") is True:
         try:
-            hierarchy = expand_child_hierarchy(source, session_pat(), list(root_ids))
+            hierarchy, included_child_ids, included_affected_ids = expand_work_item_selection(
+                source, session_pat(), list(root_ids),
+                include_children=body.get("includeChildren") is True,
+                include_affected=body.get("includeAffected") is True,
+            )
         except (ValueError, PermissionError, ConnectionError, RuntimeError) as exc:
             return jsonify({"ok": False, "message": str(exc)}), 400
         selected_ids = [int(item["id"]) for item in hierarchy]
@@ -1547,7 +1621,11 @@ def preview():
                     "destination": destination.project,
                     "destinationId": destination_id,
                     "action": action,
-                    "status": "Included child" if numeric_id not in root_ids else "Planned",
+                    "status": (
+                        "Included relationship item" if numeric_id in included_affected_ids
+                        else "Included child" if numeric_id in included_child_ids
+                        else "Planned"
+                    ),
                 })
     total_pairs = len(selected_ids) * len(destination_refs)
     create_count = total_pairs - mapped_pairs
@@ -1596,10 +1674,10 @@ def sync():
         destination_refs = [parse_project_url(str(url)) for url in destinations]
         validate_project_direction(source, destination_refs)
         requested_ids = list(selected_ids)
-        source_items = (
-            expand_child_hierarchy(source, pat, requested_ids)
-            if body.get("includeChildren") is True
-            else fetch_work_items(source, pat, requested_ids)
+        source_items, _, _ = expand_work_item_selection(
+            source, pat, requested_ids,
+            include_children=body.get("includeChildren") is True,
+            include_affected=body.get("includeAffected") is True,
         )
         selected_ids = [int(item["id"]) for item in source_items]
         found_ids = {int(item["id"]) for item in source_items}

@@ -78,6 +78,7 @@ function currentConfig() {
     fields: $$("#fieldList input:checked").map(input => input.value),
     preserveRelationships: $("#relations").checked,
     includeChildren: $("#includeChildren").checked,
+    includeAffected: $("#includeAffected").checked,
     liveWrites: $("#liveWrites").checked
   };
 }

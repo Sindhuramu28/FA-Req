@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 import app as app_module
 from app import (
-    app, azure_attachment_download, expand_child_hierarchy, load_source_work_items, parse_project_url,
+    app, azure_attachment_download, expand_child_hierarchy, expand_work_item_selection,
+    load_source_work_items, parse_project_url,
     synchronize_attachments, synchronize_hyperlinks, synchronize_links, work_item_patch,
 )
 
@@ -524,10 +525,10 @@ class AppTests(unittest.TestCase):
         hierarchy = expand_child_hierarchy(source, "pat", [1])
         self.assertEqual([item["id"] for item in hierarchy], [1, 2, 3])
 
-    @patch("app.expand_child_hierarchy")
+    @patch("app.expand_work_item_selection")
     @patch("app.session_pat", return_value="read-pat")
     def test_preview_labels_automatically_included_child(self, session_pat, expand_hierarchy):
-        expand_hierarchy.return_value = [
+        items = [
             {
                 "id": 1, "rev": 1,
                 "fields": {"System.Title": "Epic", "System.WorkItemType": "Epic"},
@@ -537,6 +538,7 @@ class AppTests(unittest.TestCase):
                 "fields": {"System.Title": "Child", "System.WorkItemType": "Requirement"},
             },
         ]
+        expand_hierarchy.return_value = (items, {2}, set())
         response = self.client.post("/api/preview", json={
             "source": "https://dev.azure.com/example/source",
             "selectedIds": [1],
@@ -548,6 +550,43 @@ class AppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         child = next(row for row in response.json["changes"] if row["sourceId"] == 2)
         self.assertEqual(child["status"], "Included child")
+
+    @patch("app.fetch_work_items")
+    def test_affected_item_is_included_for_one_level(self, fetch_work_items):
+        fetch_work_items.side_effect = [
+            [{
+                "id": 10,
+                "fields": {
+                    "System.TeamProject": "source",
+                    "System.WorkItemType": "Feature",
+                },
+                "relations": [{
+                    "rel": "Custom.LinkTypes.Affects-Forward",
+                    "url": "https://dev.azure.com/example/_apis/wit/workItems/20",
+                    "attributes": {"name": "Affects"},
+                }],
+            }],
+            [{
+                "id": 20,
+                "fields": {
+                    "System.TeamProject": "source",
+                    "System.WorkItemType": "Requirement",
+                },
+                "relations": [{
+                    "rel": "Custom.LinkTypes.Affects-Forward",
+                    "url": "https://dev.azure.com/example/_apis/wit/workItems/30",
+                    "attributes": {"name": "Affects"},
+                }],
+            }],
+        ]
+        source = parse_project_url("https://dev.azure.com/example/source")
+        items, child_ids, affected_ids = expand_work_item_selection(
+            source, "pat", [10], include_children=False, include_affected=True
+        )
+        self.assertEqual([item["id"] for item in items], [10, 20])
+        self.assertEqual(child_ids, set())
+        self.assertEqual(affected_ids, {20})
+        self.assertEqual(fetch_work_items.call_count, 2)
 
     def test_export_latest_sync_log_contains_item_change_rows(self):
         with app_module.database() as db:
