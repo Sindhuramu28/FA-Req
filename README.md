@@ -40,7 +40,7 @@ The packaged `SyncWorkTrack.exe` opens as a desktop application. It does not sho
 
 `testsyncapp.exe` is a separate UI prototype. It displays disabled, type-specific field choices when Epic, Feature, Requirement, Task, or Test Case is selected. These prototype choices are intentionally visual-only and are never included in Azure synchronization requests. The regular `SyncWorkTrack.exe` does not display this section.
 
-**Export log** saves the most recent completed synchronization to `%USERPROFILE%\Downloads` as `SyncWorkTrack-SYNC-....csv` and displays the full saved path. Preview-only results are not exported. The CSV contains run metadata and one row per source/destination item with IDs, title, type, action, status, and error details; it never contains the PAT.
+**Export log** creates `%USERPROFILE%\Downloads\SyncWorkTrack Exported Logs` when needed, saves the most recent completed synchronization there as `SyncWorkTrack-SYNC-....csv`, and displays the full saved path. Preview-only results are not exported. The CSV contains run metadata and one row per source/destination item with IDs, title, type, action, status, and error details; it never contains the PAT.
 
 ## PAT handling
 

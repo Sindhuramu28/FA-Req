@@ -1790,9 +1790,11 @@ def export_latest_sync_log():
 def save_latest_sync_log():
     try:
         filename, content = latest_sync_csv()
-        downloads = os.path.join(os.path.expanduser("~"), "Downloads")
-        os.makedirs(downloads, exist_ok=True)
-        path = os.path.join(downloads, filename)
+        export_folder = os.path.join(
+            os.path.expanduser("~"), "Downloads", "SyncWorkTrack Exported Logs"
+        )
+        os.makedirs(export_folder, exist_ok=True)
+        path = os.path.join(export_folder, filename)
         with open(path, "w", encoding="utf-8", newline="") as handle:
             handle.write(content)
         return jsonify({

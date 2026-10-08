@@ -514,7 +514,12 @@ class AppTests(unittest.TestCase):
             saved = self.client.post("/api/export/latest/save", json={})
         self.assertEqual(saved.status_code, 200)
         self.assertTrue(os.path.isfile(saved.json["path"]))
-        self.assertIn(os.path.join(self.temp_directory.name, "Downloads"), saved.json["path"])
+        self.assertIn(
+            os.path.join(
+                self.temp_directory.name, "Downloads", "SyncWorkTrack Exported Logs"
+            ),
+            saved.json["path"],
+        )
 
     def test_export_latest_sync_log_reports_when_no_run_exists(self):
         response = self.client.get("/api/export/latest")
