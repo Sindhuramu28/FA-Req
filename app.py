@@ -1722,8 +1722,7 @@ def sync():
     })
 
 
-@app.get("/api/export/latest")
-def export_latest_sync_log():
+def latest_sync_csv() -> tuple[str, str]:
     with database() as db:
         run = db.execute(
             """SELECT run_id, started_at, completed_at, mode, source_project,
@@ -1733,10 +1732,7 @@ def export_latest_sync_log():
                ORDER BY completed_at DESC LIMIT 1"""
         ).fetchone()
         if run is None:
-            return jsonify({
-                "ok": False,
-                "message": "No completed synchronization log is available yet.",
-            }), 404
+            raise ValueError("No completed synchronization log is available yet.")
         rows = db.execute(
             """SELECT source_id, title, work_item_type, destination,
                       destination_id, action, status, error
@@ -1774,11 +1770,44 @@ def export_latest_sync_log():
             row["status"], row["error"],
         ]])
     filename = f"SyncWorkTrack-{run['run_id']}.csv"
+    return filename, "\ufeff" + output.getvalue()
+
+
+@app.get("/api/export/latest")
+def export_latest_sync_log():
+    try:
+        filename, content = latest_sync_csv()
+    except ValueError as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 404
     return Response(
-        "\ufeff" + output.getvalue(),
+        content,
         mimetype="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.post("/api/export/latest/save")
+def save_latest_sync_log():
+    try:
+        filename, content = latest_sync_csv()
+        downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+        os.makedirs(downloads, exist_ok=True)
+        path = os.path.join(downloads, filename)
+        with open(path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
+        return jsonify({
+            "ok": True,
+            "path": path,
+            "filename": filename,
+            "message": f"Synchronization log saved to {path}",
+        })
+    except ValueError as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 404
+    except OSError as exc:
+        return jsonify({
+            "ok": False,
+            "message": f"The synchronization log could not be saved: {exc}",
+        }), 500
 
 
 @app.get("/health")
