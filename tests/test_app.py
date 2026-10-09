@@ -638,9 +638,11 @@ class AppTests(unittest.TestCase):
             db.execute(
                 """INSERT INTO sync_run_items
                    (run_id, source_id, title, work_item_type, destination,
-                    destination_id, action, status, error)
+                    destination_id, action, status, error, description_status,
+                    discussion_status, link_status, attachment_status)
                    VALUES ('SYNC-TEST', 12, 'Feature title', 'Feature',
-                           'destination', 99, 'Created', 'Success', '')"""
+                           'destination', 99, 'Created', 'Success', '',
+                           'Changed', 'No change', 'Changed', 'Not selected')"""
             )
         response = self.client.get("/api/export/latest")
         self.assertEqual(response.status_code, 200)
@@ -649,6 +651,8 @@ class AppTests(unittest.TestCase):
         self.assertIn("SYNC-TEST", exported)
         self.assertIn("Feature title", exported)
         self.assertIn("destination", exported)
+        self.assertIn("Description,Discussions,Links,Attachments", exported)
+        self.assertIn("Changed,No change,Changed,Not selected", exported)
         export_folder = os.path.join(self.temp_directory.name, "Exported Logs")
         with patch("app.export_log_directory", return_value=export_folder):
             saved = self.client.post("/api/export/latest/save", json={})

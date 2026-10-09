@@ -208,6 +208,10 @@ def initialize_database() -> None:
                 action TEXT NOT NULL,
                 status TEXT NOT NULL,
                 error TEXT NOT NULL DEFAULT '',
+                description_status TEXT NOT NULL DEFAULT 'Not recorded',
+                discussion_status TEXT NOT NULL DEFAULT 'Not recorded',
+                link_status TEXT NOT NULL DEFAULT 'Not recorded',
+                attachment_status TEXT NOT NULL DEFAULT 'Not recorded',
                 FOREIGN KEY (run_id) REFERENCES sync_runs(run_id)
             );
             CREATE TABLE IF NOT EXISTS synced_comments (
@@ -260,6 +264,18 @@ def initialize_database() -> None:
             );
             """
         )
+        existing_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(sync_run_items)")
+        }
+        for column_name in (
+            "description_status", "discussion_status", "link_status",
+            "attachment_status",
+        ):
+            if column_name not in existing_columns:
+                db.execute(
+                    f"ALTER TABLE sync_run_items ADD COLUMN {column_name} "
+                    "TEXT NOT NULL DEFAULT 'Not recorded'"
+                )
 
 
 initialize_database()
@@ -836,6 +852,7 @@ def synchronize_links(
     destination: ProjectRef,
     pat: str,
     source_items: list[dict[str, Any]],
+    item_activity: dict[int, dict[str, Any]] | None = None,
 ) -> tuple[int, int, list[str]]:
     selected_ids = [int(item["id"]) for item in source_items]
     related_ids = {
@@ -942,8 +959,14 @@ def synchronize_links(
                     )
             added += len(additions)
             removed += len(remove_indexes)
+            if item_activity is not None:
+                item_activity[source_id] = {
+                    "changed": len(additions) + len(remove_indexes), "failed": False,
+                }
         except (ValueError, PermissionError, ConnectionError, RuntimeError) as exc:
             errors.append(f"Links for source {source_id}: {exc}")
+            if item_activity is not None:
+                item_activity[source_id] = {"changed": 0, "failed": True}
     return added, removed, errors
 
 
@@ -1713,6 +1736,11 @@ def sync():
     entries: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     totals = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+    description_selected = "Description" in selected_fields
+    discussions_selected = "Discussions" in selected_fields
+    hyperlinks_selected = "Hyperlinks" in selected_fields
+    attachments_selected = "Attachments" in selected_fields
+    relationships_selected = body.get("preserveRelationships") is True
     for destination in destination_refs:
         destination_totals = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
         destination_warnings: list[str] = []
@@ -1742,6 +1770,7 @@ def sync():
                 and int(item["rev"]) <= int(mapping["last_source_revision"])
             ):
                 item_warnings: list[str] = []
+                attachment_changed = 0
                 if "Attachments" in selected_fields:
                     added_count, removed_count, attachment_errors = synchronize_attachments(
                         source, destination, pat, item, destination_id
@@ -1750,6 +1779,7 @@ def sync():
                     attachments_removed += removed_count
                     destination_warnings.extend(attachment_errors)
                     item_warnings.extend(attachment_errors)
+                    attachment_changed = added_count + removed_count
                 destination_totals["skipped"] += 1
                 totals["skipped"] += 1
                 results.append({
@@ -1758,9 +1788,26 @@ def sync():
                     "action": "Up to date", "status": (
                         "Skipped with warnings" if item_warnings else "Skipped"
                     ), "error": " | ".join(item_warnings),
+                    "descriptionStatus": "No change" if description_selected else "Not selected",
+                    "discussionStatus": "No change" if discussions_selected else "Not selected",
+                    "linkStatus": (
+                        "No change" if hyperlinks_selected or relationships_selected
+                        else "Not selected"
+                    ),
+                    "attachmentStatus": (
+                        "Failed" if item_warnings else
+                        ("Changed" if attachments_selected and attachment_changed > 0
+                         else "No change" if attachments_selected else "Not selected")
+                    ),
                 })
                 continue
             item_warnings: list[str] = []
+            hyperlink_changed = 0
+            discussion_changed = 0
+            attachment_changed = 0
+            hyperlink_failed = False
+            discussion_failed = False
+            attachment_failed = False
             try:
                 patch = work_item_patch(
                     item, selected_fields, include_hyperlinks=destination_id is None,
@@ -1794,6 +1841,8 @@ def sync():
                     )
                     hyperlinks_added += added_count
                     hyperlinks_removed += removed_count
+                    hyperlink_changed += added_count + removed_count
+                    hyperlink_failed = bool(hyperlink_errors)
                     destination_warnings.extend(hyperlink_errors)
                     item_warnings.extend(hyperlink_errors)
                 if "Discussions" in selected_fields:
@@ -1801,6 +1850,8 @@ def sync():
                         source, destination, pat, item, destination_id
                     )
                     comments_copied += comment_count
+                    discussion_changed += comment_count
+                    discussion_failed = bool(comment_errors)
                     destination_warnings.extend(comment_errors)
                     item_warnings.extend(comment_errors)
                 if "Attachments" in selected_fields:
@@ -1809,6 +1860,8 @@ def sync():
                     )
                     attachments_added += added_count
                     attachments_removed += removed_count
+                    attachment_changed += added_count + removed_count
+                    attachment_failed = bool(attachment_errors)
                     destination_warnings.extend(attachment_errors)
                     item_warnings.extend(attachment_errors)
                 results.append({
@@ -1817,6 +1870,22 @@ def sync():
                     "action": "Updated" if action == "Update" else "Created",
                     "status": "Success with warnings" if item_warnings else "Success",
                     "error": " | ".join(item_warnings),
+                    "descriptionStatus": "Changed" if description_selected else "Not selected",
+                    "discussionStatus": (
+                        "Failed" if discussion_failed else "Changed" if discussion_changed else
+                        "No change" if discussions_selected else "Not selected"
+                    ),
+                    "linkStatus": (
+                        "Failed" if hyperlink_failed else "Changed" if hyperlink_changed or
+                        (action == "Create" and hyperlinks_selected and any(
+                            link.get("rel") == "Hyperlink" for link in item.get("relations", [])
+                        )) else "No change" if hyperlinks_selected or relationships_selected
+                        else "Not selected"
+                    ),
+                    "attachmentStatus": (
+                        "Failed" if attachment_failed else "Changed" if attachment_changed else
+                        "No change" if attachments_selected else "Not selected"
+                    ),
                 })
             except (ValueError, PermissionError, ConnectionError, RuntimeError, KeyError) as exc:
                 destination_totals["failed"] += 1
@@ -1825,14 +1894,31 @@ def sync():
                     "sourceId": source_id, "title": title, "type": item_type,
                     "destination": destination.project, "destinationId": destination_id,
                     "action": action, "status": "Failed", "error": str(exc),
+                    "descriptionStatus": "Failed" if description_selected else "Not selected",
+                    "discussionStatus": "Failed" if discussions_selected else "Not selected",
+                    "linkStatus": (
+                        "Failed" if hyperlinks_selected or relationships_selected else "Not selected"
+                    ),
+                    "attachmentStatus": "Failed" if attachments_selected else "Not selected",
                 })
         links_added = 0
         links_removed = 0
-        if body.get("preserveRelationships") is True:
+        if relationships_selected:
+            link_activity: dict[int, dict[str, Any]] = {}
             links_added, links_removed, link_errors = synchronize_links(
-                source, destination, pat, source_items
+                source, destination, pat, source_items, link_activity
             )
             destination_warnings.extend(link_errors)
+            for row in results:
+                if row["destination"] != destination.project:
+                    continue
+                activity = link_activity.get(int(row["sourceId"]))
+                if not activity:
+                    continue
+                if activity["failed"]:
+                    row["linkStatus"] = "Failed"
+                elif activity["changed"] and row["linkStatus"] != "Failed":
+                    row["linkStatus"] = "Changed"
         entries.append({
             "destination": destination.project,
             "status": (
@@ -1862,13 +1948,15 @@ def sync():
         db.executemany(
             """INSERT INTO sync_run_items
                (run_id, source_id, title, work_item_type, destination,
-                destination_id, action, status, error)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                destination_id, action, status, error, description_status,
+                discussion_status, link_status, attachment_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     run_id, row["sourceId"], row["title"], row["type"],
                     row["destination"], row.get("destinationId"), row["action"],
-                    row["status"], row.get("error", ""),
+                    row["status"], row.get("error", ""), row["descriptionStatus"],
+                    row["discussionStatus"], row["linkStatus"], row["attachmentStatus"],
                 )
                 for row in results
             ],
@@ -1900,7 +1988,8 @@ def latest_sync_csv() -> tuple[str, str]:
             raise ValueError("No completed synchronization log is available yet.")
         rows = db.execute(
             """SELECT source_id, title, work_item_type, destination,
-                      destination_id, action, status, error
+                      destination_id, action, status, description_status,
+                      discussion_status, link_status, attachment_status, error
                FROM sync_run_items WHERE run_id=?
                ORDER BY destination, source_id""",
             (run["run_id"],),
@@ -1926,13 +2015,15 @@ def latest_sync_csv() -> tuple[str, str]:
     writer.writerow([])
     writer.writerow([
         "Source ID", "Title", "Type", "Destination", "Destination ID",
-        "Action", "Status", "Error",
+        "Action", "Status", "Description", "Discussions", "Links",
+        "Attachments", "Error",
     ])
     for row in rows:
         writer.writerow([spreadsheet_safe(value) for value in [
             row["source_id"], row["title"], row["work_item_type"],
             row["destination"], row["destination_id"] or "", row["action"],
-            row["status"], row["error"],
+            row["status"], row["description_status"], row["discussion_status"],
+            row["link_status"], row["attachment_status"], row["error"],
         ]])
     filename = f"SyncWorkTrack-{run['run_id']}.csv"
     return filename, "\ufeff" + output.getvalue()
