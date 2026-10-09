@@ -589,6 +589,26 @@ def expand_work_item_selection(
                 items.append(related)
                 known_ids.add(related_id)
                 affected_ids.add(related_id)
+        # When both relationship options are enabled, include the descendants of
+        # directly affected items as well. This preserves mixed chains such as
+        # Feature -> Affected By Requirement -> Child Task without recursively
+        # following a wider Affects/Affected By network.
+        if include_children and affected_ids:
+            affected_branches = expand_child_hierarchy(
+                ref, pat, sorted(affected_ids), limit
+            )
+            for descendant in affected_branches:
+                descendant_id = int(descendant["id"])
+                if descendant_id in known_ids:
+                    continue
+                if len(known_ids) + 1 > limit:
+                    raise ValueError(
+                        f"The selected hierarchy and affected items exceed the {limit}-item safety limit. "
+                        "Select a smaller branch."
+                    )
+                items.append(descendant)
+                known_ids.add(descendant_id)
+                child_ids.add(descendant_id)
     return items, child_ids, affected_ids
 
 

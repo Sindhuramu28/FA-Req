@@ -60,6 +60,8 @@ When **Include linked child items** is selected, choosing a source Epic, Feature
 
 When **Include Affects/Affected By items** is selected, SyncWorkTrack includes directly connected items for one level and labels them **Included relationship item** in Preview. It does not recursively follow an Affects network. The option recognizes Azure relations whose API reference or display name identifies Affects/Affected By; the related items must be supported work-item types in the configured source project. **Copy mapped work-item links** must remain selected to recreate the relationship in destinations.
 
+When **Include linked child items** and **Include Affects/Affected By items** are both selected, SyncWorkTrack also includes the Parent/Child descendants of each directly affected item. For example, selecting a Feature can include its affected Requirement and that Requirement's child Task. The app still follows Affects/Affected By for only one level.
+
 ## Existing destination items
 
 Select source items and choose **Match existing**. SyncWorkTrack searches each destination for exact work-item Type + Title matches and requires the user to confirm the destination ID. **Link and sync** stores the mapping and applies selected source fields on the next synchronization. **Link only** stores the current source revision as the baseline, so only later source changes synchronize. Neither option changes the destination State.

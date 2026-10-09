@@ -576,6 +576,55 @@ class AppTests(unittest.TestCase):
         self.assertEqual(affected_ids, {20})
         self.assertEqual(fetch_work_items.call_count, 2)
 
+    @patch("app.expand_child_hierarchy")
+    @patch("app.fetch_work_items")
+    def test_children_of_directly_affected_item_are_included(
+        self, fetch_work_items, expand_child_hierarchy
+    ):
+        feature = {
+            "id": 10,
+            "fields": {
+                "System.TeamProject": "source",
+                "System.WorkItemType": "Feature",
+            },
+            "relations": [{
+                "rel": "Custom.LinkTypes.Affects-Forward",
+                "url": "https://dev.azure.com/example/_apis/wit/workItems/20",
+                "attributes": {"name": "Affects"},
+            }],
+        }
+        requirement = {
+            "id": 20,
+            "fields": {
+                "System.TeamProject": "source",
+                "System.WorkItemType": "Requirement",
+            },
+            "relations": [{
+                "rel": "System.LinkTypes.Hierarchy-Forward",
+                "url": "https://dev.azure.com/example/_apis/wit/workItems/30",
+            }],
+        }
+        task = {
+            "id": 30,
+            "fields": {
+                "System.TeamProject": "source",
+                "System.WorkItemType": "Task",
+            },
+            "relations": [],
+        }
+        expand_child_hierarchy.side_effect = [[feature], [requirement, task]]
+        fetch_work_items.return_value = [requirement]
+        source = parse_project_url("https://dev.azure.com/example/source")
+
+        items, child_ids, affected_ids = expand_work_item_selection(
+            source, "pat", [10], include_children=True, include_affected=True
+        )
+
+        self.assertEqual([item["id"] for item in items], [10, 20, 30])
+        self.assertEqual(child_ids, {30})
+        self.assertEqual(affected_ids, {20})
+        self.assertEqual(expand_child_hierarchy.call_count, 2)
+
     def test_export_latest_sync_log_contains_item_change_rows(self):
         with app_module.database() as db:
             db.execute(
